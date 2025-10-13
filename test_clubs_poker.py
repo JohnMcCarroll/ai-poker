@@ -2,6 +2,7 @@ from clubs_gym.agent.base import BaseAgent
 import clubs
 import random
 from clubs_gym.envs import ClubsEnv
+import time
 
 
 # Define agent
@@ -36,14 +37,15 @@ if __name__ == '__main__':
         )
     env.register_agents([RandomAgent()] * 2)
     obs = env.reset()
-    env.render(sleep=15)
+    env.render(sleep=10)
 
     # Simulate poker game
     while True:
         bet = env.act(obs)
         obs, rewards, done, info = env.step(bet)
 
-        env.render(sleep=5)
+        # env.render(sleep=5)
+        time.sleep(5)
         
         # print("OBS:")
         # print(obs)
