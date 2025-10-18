@@ -189,7 +189,7 @@ class CommandLineViewer:
         if self.current_state['hand_result']:
             print("\n<<< HAND RESULT >>>")
             print(self.current_state['hand_result'])
-            print("<<< /HAND RESULT >>>")
+            print("<<< HAND RESULT >>>")
             
         print("="*70)
 
@@ -213,6 +213,7 @@ class CommandLineViewer:
 # Define agent
 class RandomAgent(BaseAgent):
     def act(self, obs: clubs.poker.engine.ObservationDict) -> int:
+        # return 500
         prob = random.random()
         if prob < 0.3334:
             return 0
@@ -224,6 +225,7 @@ class RandomAgent(BaseAgent):
 
 class RandomAgent2(BaseAgent):
     def act(self, obs: clubs.poker.engine.ObservationDict) -> int:
+        # return 500
         prob = random.random()
         if prob < 0.5:
             return 0
@@ -259,6 +261,7 @@ if __name__ == '__main__':
     time.sleep(3)
 
     done = [False]
+    game_over = False
 
     # Simulate poker game
     while True:
@@ -271,7 +274,6 @@ if __name__ == '__main__':
             winner = 1 if rewards[0] > 0 else 2
             hand_result = f"Player {winner} won {rewards[winner-1]}"
             game_over = 0 in env.dealer.stacks
-            obs = env.reset()
 
         viz.update(hand_result=hand_result)
         viz.display()
@@ -280,22 +282,9 @@ if __name__ == '__main__':
             break
 
         time.sleep(3)
-        
-        # print("OBS:")
-        # print(obs)
-        # print()
-        # print("ACTION")
-        # print(bet)
-        # print()
-        # print("REWARDS")
-        # print(rewards)
-        # print()
-        # print("INFO:")
-        # print(info)
-        # print()
-        # print("DONE:")
-        
-        # print(done)
+
+        if all(done):
+            obs = env.reset()
 
 
     # TODO: detect and declare winner of heads up match
