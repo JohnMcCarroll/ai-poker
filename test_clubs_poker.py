@@ -3,77 +3,159 @@ import clubs
 import random
 from clubs_gym.envs import ClubsEnv
 import time
-
-
-# Visualization code
 import os
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Union, Literal, Optional, Tuple
+from clubs.poker.engine import Dealer
+
+
+class PokerDealer(Dealer):
+    def _bet_sizes(self) -> Tuple[int, int, int]:
+        # call difference between commit and maximum commit
+        call = max(self.street_commits) - self.street_commits[self.action]
+        # min raise at least largest previous raise
+        # if limit game min and max raise equal to raise size
+        raise_size = self.raise_sizes[self.street]
+        if isinstance(raise_size, int):
+            max_raise = min_raise = raise_size + call
+        else:
+            # TODO: add nuance to this - we want min raise to be big_blind on each street, but reraises should consider last bet size
+            # min_raise = max(self.big_blind, self.largest_raise + call)
+            min_raise = self.big_blind
+            if raise_size == "pot":
+                max_raise = self.pot + call * 2
+            elif raise_size == float("inf"):
+                max_raise = self.stacks[self.action]
+        # if maximum number of raises in street
+        # was reached cap raise at 0
+        if self.street_raises >= self.num_raises[self.street]:
+            min_raise = max_raise = 0
+        # if last full raise was done by active player
+        # (another player has raised less than minimum raise amount)
+        # cap active players raise size to 0
+        if self.street_raises and call < self.largest_raise:
+            min_raise = max_raise = 0
+        # clip bets to stack size
+        call = min(call, self.stacks[self.action])
+        min_raise = min(min_raise, self.stacks[self.action])
+        max_raise = min(max_raise, self.stacks[self.action])
+        return call, min_raise, max_raise
+
+
+class PokerEnv(ClubsEnv):
+    def __init__(
+        self,
+        num_players: int,
+        num_streets: int,
+        blinds: Union[int, List[int]],
+        antes: Union[int, List[int]],
+        raise_sizes: Union[
+            int, Literal["pot", "inf"], List[Union[int, Literal["pot", "inf"]]]
+        ],
+        num_raises: Union[int, Literal["inf"], List[Union[int, Literal["inf"]]]],
+        num_suits: int,
+        num_ranks: int,
+        num_hole_cards: int,
+        num_community_cards: Union[int, List[int]],
+        num_cards_for_hand: int,
+        mandatory_num_hole_cards: int,
+        start_stack: int,
+        low_end_straight: bool = True,
+        order: Optional[List[str]] = None,
+    ) -> None:
+        super().__init__(
+            num_players=num_players,
+            num_streets=num_streets,
+            blinds=blinds,
+            antes=antes,
+            raise_sizes=raise_sizes,
+            num_raises=num_raises,
+            num_suits=num_suits,
+            num_ranks=num_ranks,
+            num_hole_cards=num_hole_cards,
+            num_community_cards=num_community_cards,
+            num_cards_for_hand=num_cards_for_hand,
+            mandatory_num_hole_cards=mandatory_num_hole_cards,
+            start_stack=start_stack,
+            low_end_straight=low_end_straight
+        )
+        self.dealer = PokerDealer(
+            num_players,
+            num_streets,
+            blinds,
+            antes,
+            raise_sizes,
+            num_raises,
+            num_suits,
+            num_ranks,
+            num_hole_cards,
+            num_community_cards,
+            num_cards_for_hand,
+            mandatory_num_hole_cards,
+            start_stack,
+            low_end_straight,
+            order,
+        )
+
 
 class CommandLineViewer:
     """
-    A simple command-line viewer for a poker environment, designed to
-    extract and display critical game state information from the observation.
-    
-    This version is specifically tailored to use the 'clubs' environment keys: 
-    'stacks', 'pot', 'community_cards', 'hole_cards', and 'street_commits' (for bets).
+    A command-line viewer for a poker environment, updated to pull all necessary 
+    information directly from the Dealer object.
     """
-    def __init__(self, num_players: int = 2):
+    def __init__(self, dealer: Any, num_players: int = 2):
         self.num_players = num_players
+        self.dealer = dealer # Store the Dealer object reference
+        
         # Initialize persistent state storage
         self.current_state = {
             'stacks': [0] * num_players,
             'bets': [0.0] * num_players,
             'pot': 0.0,
-            # Use list of lists for persistent card storage
             'hole_cards': [[] for _ in range(num_players)], 
-            'community_cards': []
+            'community_cards': [],
+            'acting_player': 0,
+            'hand_result': None
         }
+        # Attempt to pull initial state from dealer
+        self._update_dealer_info()
 
-    def update(self, observation: Dict[str, Any]):
-        """
-        Updates the internal state using the latest observation data keys.
-        
-        Args:
-            observation (Dict): The full observation dictionary returned by env.step().
-        """
+
+    def _update_dealer_info(self):
+        """Pulls necessary game state attributes directly from the Dealer object."""
         try:
-            # --- REQUIRED DATA PARSING (Using confirmed keys) ---
+            # We assume the Dealer object has 'stacks' as this is crucial state info.
+            # If this fails, the user must fetch stacks from the environment and pass them to update().
+            self.current_state['stacks'] = getattr(self.dealer, 'stacks', self.current_state['stacks'])
             
-            # Stacks (e.g., [498, 489])
-            self.current_state['stacks'] = observation.get('stacks', self.current_state['stacks'])
-
-            # Pot Size (e.g., 13)
-            self.current_state['pot'] = observation.get('pot', self.current_state['pot'])
-
-            # Current Bets (from 'street_commits')
-            # 'street_commits' contains the total amount bet by each player in the current betting street.
-            self.current_state['bets'] = observation.get('street_commits', self.current_state['bets'])
-
-            # Community Cards
-            self.current_state['community_cards'] = observation.get('community_cards', self.current_state['community_cards'])
+            self.current_state['pot'] = getattr(self.dealer, 'pot', self.current_state['pot'])
             
-            # Hole Cards (Agent-centric update)
-            # The 'hole_cards' key provides the cards for the player whose observation this is (index 'action').
-            if 'hole_cards' in observation:
-                player_index = observation.get('action') 
-                
-                if player_index is not None and 0 <= player_index < self.num_players:
-                    # Store the cards for the acting player persistently
-                    cards_data = observation['hole_cards']
-                    
-                    # Ensure we store the cards as a list of objects
-                    if isinstance(cards_data, list):
-                        self.current_state['hole_cards'][player_index] = cards_data
-                    elif cards_data is not None:
-                        self.current_state['hole_cards'][player_index] = [cards_data]
+            # 'street_commits' is the total bet by each player in the current street.
+            self.current_state['bets'] = getattr(self.dealer, 'street_commits', self.current_state['bets'])
 
+            # Hole cards are now accessible for all players from the Dealer
+            self.current_state['hole_cards'] = getattr(self.dealer, 'hole_cards', self.current_state['hole_cards'])
 
-        except Exception as e:
-            print(f"ERROR: An error occurred during observation parsing: {e}")
+            self.current_state['community_cards'] = getattr(self.dealer, 'community_cards', self.current_state['community_cards'])
+
+            # Active players list (e.g., [False, True] means Player 2 is acting)
+            self.current_state['acting_player'] = getattr(self.dealer, 'action', self.current_state['acting_player'])
+            
+        except AttributeError as e:
+            print(f"ERROR: Dealer object is missing an expected attribute: {e}. Check dealer structure.")
+        
+    def update(self, hand_result: str = None):
+        """
+        Updates the internal state by pulling the latest data from the Dealer.
+
+        Args:
+            hand_result (str): Optional string describing the outcome (e.g., "Player 1 wins $500 with a Straight").
+                               Should only be passed after the final step.
+        """
+        self._update_dealer_info()
+        self.current_state['hand_result'] = hand_result
             
     def display(self):
         """Prints the current game state to the console."""
-        # Clear screen is important for a dynamic display
         os.system('cls' if os.name == 'nt' else 'clear') 
         print("="*70)
         print("POKER GAME STATE VIEWER (Command Line) | Clubs Environment")
@@ -93,27 +175,33 @@ class CommandLineViewer:
             # Safely retrieve stack and bet data
             stack = self.current_state['stacks'][i] if i < len(self.current_state['stacks']) else 0.0
             bet = self.current_state['bets'][i] if i < len(self.current_state['bets']) else 0.0
+            is_active = self.current_state['acting_player'] == i
+            
+            active_marker = " <--- ACTING" if is_active else ""
 
-            # Assuming the agent is P1 (index 0) and opponent is P2 (index 1) for the display
-            print(f"PLAYER {i + 1}")
+            print(f"PLAYER {i + 1}{active_marker}")
             print(f"  Stack:      ${stack:,.2f}")
             print(f"  Commitment: ${bet:,.2f} (This Betting Street)")
             print(f"  Hole Cards: {hole_cards}")
             print("-" * 35)
+
+        # Hand Winner Display
+        if self.current_state['hand_result']:
+            print("\n<<< HAND RESULT >>>")
+            print(self.current_state['hand_result'])
+            print("<<< /HAND RESULT >>>")
             
         print("="*70)
 
     def _format_cards(self, cards: List[Any]) -> str:
-        """Helper to format card representations, assuming Card objects use str() for display."""
+        """Helper to format card representations, stripping object metadata."""
         if not cards:
             return "[--]"
         
-        # The Card objects in your environment look like 'Card (...): 7♠'. 
-        # This logic strips the extra object metadata for a cleaner look.
         formatted_cards = []
         for c in cards:
             s = str(c)
-            # Find the actual card representation (e.g., '7♠') after the colon and space.
+            # Strips 'Card (3040834013072): ' from the string representation
             if ': ' in s:
                 formatted_cards.append(s.split(': ', 1)[-1])
             else:
@@ -134,9 +222,20 @@ class RandomAgent(BaseAgent):
             return 100
 
 
+class RandomAgent2(BaseAgent):
+    def act(self, obs: clubs.poker.engine.ObservationDict) -> int:
+        prob = random.random()
+        if prob < 0.5:
+            return 0
+        elif prob < 0.75:
+            return 10
+        else:
+            return 100
+
+
 if __name__ == '__main__':
     # Instantiate heads up poker env
-    env = ClubsEnv(
+    env = PokerEnv(
         num_players=2,
         num_streets=4,
         blinds=[1,2],
@@ -152,25 +251,28 @@ if __name__ == '__main__':
         start_stack=500,
         low_end_straight=True
         )
-    env.register_agents([RandomAgent()] * 2)
+    env.register_agents([RandomAgent(), RandomAgent2()])
     obs = env.reset()
-    # env.render(sleep=5)
-    viz = CommandLineViewer(num_players=2)
-    viz.update(obs)
+    viz = CommandLineViewer(env.dealer, num_players=2)
+    viz.update()
     viz.display()
-    time.sleep(2)
+    time.sleep(3)
+
+    done = [False]
 
     # Simulate poker game
     while True:
+
+        if all(done):
+            obs = env.reset()
+
         bet = env.act(obs)
         obs, rewards, done, info = env.step(bet)
 
-        viz.update(obs)
+        viz.update()
         viz.display()
 
-        # # env.render(sleep=5)
-        # print('step')
-        time.sleep(2)
+        time.sleep(3)
         
         # print("OBS:")
         # print(obs)
@@ -188,8 +290,7 @@ if __name__ == '__main__':
         
         # print(done)
 
-        if all(done):
-            break
 
-    # print(rewards)
-    env.close()
+
+        # TODO: detect and declare winner of heads up match
+        
