@@ -263,14 +263,21 @@ if __name__ == '__main__':
     # Simulate poker game
     while True:
 
-        if all(done):
-            obs = env.reset()
-
         bet = env.act(obs)
         obs, rewards, done, info = env.step(bet)
 
-        viz.update()
+        hand_result = ""
+        if all(done):
+            winner = 1 if rewards[0] > 0 else 2
+            hand_result = f"Player {winner} won {rewards[winner-1]}"
+            game_over = 0 in env.dealer.stacks
+            obs = env.reset()
+
+        viz.update(hand_result=hand_result)
         viz.display()
+
+        if game_over:
+            break
 
         time.sleep(3)
         
@@ -291,6 +298,7 @@ if __name__ == '__main__':
         # print(done)
 
 
-
-        # TODO: detect and declare winner of heads up match
-        
+    # TODO: detect and declare winner of heads up match
+    print("\n--- GAME OVER ---")
+    print(f"Final Stacks: Player 1: {env.dealer.stacks[0]}, Player 2: {env.dealer.stacks[1]}")
+    # time.sleep(10)
