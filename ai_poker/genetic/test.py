@@ -2,6 +2,7 @@ import time
 from ai_poker.mvp.poker_env import PokerEnv
 from ai_poker.mvp.visualization import CommandLineViewer
 from ai_poker.mvp.agents import RandomAgent, RandomAgent2
+from ai_poker.genetic.simple_agents import ManiacAgent, StationAgent, SimpleValueAgent
 
 
 if __name__ == '__main__':
@@ -22,12 +23,12 @@ if __name__ == '__main__':
         start_stack=500,
         low_end_straight=True
         )
-    env.register_agents([RandomAgent(), RandomAgent2()])
+    env.register_agents([StationAgent(), SimpleValueAgent(dealer=env.dealer, position=1)])
     obs = env.reset()
     viz = CommandLineViewer(env.dealer, num_players=2)
     viz.update()
     viz.display()
-    time.sleep(3)
+    # time.sleep(3)
 
     done = [False]
     game_over = False
@@ -50,7 +51,7 @@ if __name__ == '__main__':
         if game_over:
             break
 
-        time.sleep(3)
+        # time.sleep(3)
 
         if all(done):
             obs = env.reset()
