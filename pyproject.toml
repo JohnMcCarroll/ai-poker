@@ -1,0 +1,12 @@
+[project]
+name = "ai_poker"
+version = "0.1.0"
+description = "An exploration of ML and RL techniques to the game of Texas Hold 'Em"
+requires-python = ">=3.10"
+dependencies = [
+    "gym",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
