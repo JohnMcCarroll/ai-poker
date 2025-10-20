@@ -1,19 +1,11 @@
 import operator
 import random
 import numpy as np
-import math
-
-import gym
-# import clubs_gym.envs.configure
 from deap import base, creator, tools, gp
-
 import matplotlib.pyplot as plt
-
-import time
 from ai_poker.mvp.poker_env import PokerEnv
 from ai_poker.mvp.agents import RandomAgent, RandomAgent2
 from ai_poker.genetic.simple_agents import ManiacAgent, StationAgent, SimpleValueAgent
-
 from clubs_gym.agent.base import BaseAgent
 from typing import Any
 import clubs
@@ -174,7 +166,6 @@ class ASTAgent(BaseAgent):
             hand_class = HAND_CLASSES[-8]
         else: # High Card
             hand_class = HAND_CLASSES[-9]
-            
 
         if len(obs['community_cards']) == 0:
             street = STREETS[0]
@@ -184,7 +175,6 @@ class ASTAgent(BaseAgent):
             street = STREETS[2]
         else: # River - 5 community cards
             street = STREETS[3]
-        
 
         # execute AST logic
         action = self.ast(pot_size, button, stack_size, opponent_stack_size, amount_to_call, hand_strength, hand_class, street)
@@ -234,19 +224,14 @@ def evaluate_agents(agent1_logic, agent2_logic, max_hands=500):
 
         if all(done):
             game_over = 0 in env.dealer.stacks
-
-        if game_over:
-            winnings[0] = env.dealer.stacks[0]
-            winnings[1] = env.dealer.stacks[1]
-            break
-
-        if all(done):
             num_hands += 1
             winnings[0] += rewards[0]
             winnings[1] += rewards[1]
+            if game_over:
+                break
             obs = env.reset()
-                
-    return winnings[0], winnings[1]
+
+    return winnings[0], winnings[1], num_hands
 
 
 # Register the evaluation, selection, crossover, and mutation operators
@@ -266,8 +251,8 @@ toolbox.decorate("mutate", gp.staticLimit(key=operator.attrgetter("height"), max
 def main():
     random.seed(42)
     
-    POP_SIZE = 50
-    N_GEN = 10
+    POP_SIZE = 100
+    N_GEN = 100
     CXPB, MUTPB = 0.7, 0.2
     
     pop = toolbox.population(n=POP_SIZE)
@@ -290,22 +275,27 @@ def main():
     for gen in range(N_GEN):
         # --- Evaluate the entire population ---
         # Each individual plays against every other individual (round-robin)
-        winnings_map = {i: 0.0 for i in range(len(pop))}
+        winnings_map = {i: 0 for i in range(len(pop))}
+        num_hands_map = {i: 0 for i in range(len(pop))}
         
         for i in range(len(pop)):
             for j in range(i + 1, len(pop)):
                 agent1_logic = toolbox.compile(expr=pop[i])
                 agent2_logic = toolbox.compile(expr=pop[j])
 
-                winnings1, winnings2 = toolbox.evaluate(agent1_logic, agent2_logic)
+                winnings1, winnings2, num_hands = toolbox.evaluate(agent1_logic, agent2_logic)
                 
                 winnings_map[i] += winnings1
                 winnings_map[j] += winnings2
+                num_hands_map[i] += num_hands
+                num_hands_map[j] += num_hands
 
         # Assign fitness based on total winnings
         for i, ind in enumerate(pop):
-            # Normalize winnings by number of games played
-            ind.fitness.values = (winnings_map[i] / (len(pop) - 1),)
+            # # Assign total winnings as fitness
+            # ind.fitness.values = (winnings_map[i],)
+            # Assign win rate as fitness
+            ind.fitness.values = (winnings_map[i] / num_hands_map[i] ,)
 
         # --- Log statistics ---
         record = mstats.compile(pop)
