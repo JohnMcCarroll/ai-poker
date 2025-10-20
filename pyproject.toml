@@ -5,6 +5,8 @@ description = "An exploration of ML and RL techniques to the game of Texas Hold 
 requires-python = ">=3.10"
 dependencies = [
     "gym",
+    "deap",
+    "matplotlib",
 ]
 
 [build-system]

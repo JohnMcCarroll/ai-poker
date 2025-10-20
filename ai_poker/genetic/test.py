@@ -22,7 +22,7 @@ if __name__ == '__main__':
         mandatory_num_hole_cards=0,
         start_stack=500,
         low_end_straight=True
-        )
+    )
     env.register_agents([StationAgent(), SimpleValueAgent(dealer=env.dealer, position=1)])
     obs = env.reset()
     viz = CommandLineViewer(env.dealer, num_players=2)
