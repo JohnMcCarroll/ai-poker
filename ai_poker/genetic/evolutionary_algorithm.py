@@ -4,7 +4,7 @@ import numpy as np
 import math
 
 import gym
-import clubs_gym.envs.configure
+# import clubs_gym.envs.configure
 from deap import base, creator, tools, gp
 
 import matplotlib.pyplot as plt
@@ -44,7 +44,7 @@ OUTPUT_TYPE = float
 # We will map the gym's observation dictionary to these arguments.
 ARGUMENT_TYPES = [
     float, # pot_size
-    float, # position (0 for small blind, 1 for big blind)
+    bool, # button (True for small blind, False for big blind)
     float, # stack_size
     float, # opponent_stack_size
     float, # amount_to_call
@@ -61,7 +61,7 @@ pset = gp.PrimitiveSetTyped("main", ARGUMENT_TYPES, OUTPUT_TYPE)
 # Logical operators
 pset.addPrimitive(operator.and_, [bool, bool], bool)
 pset.addPrimitive(operator.or_, [bool, bool], bool)
-pset.addPrimitive(operator.xor_, [bool, bool], bool)
+# pset.addPrimitive(operator.xor_, [bool, bool], bool)
 pset.addPrimitive(operator.not_, [bool], bool)
 
 # Comparison operators for floats
@@ -86,7 +86,7 @@ pset.addPrimitive(if_then_else, [bool, OUTPUT_TYPE, OUTPUT_TYPE], OUTPUT_TYPE)
 
 # --- Add Terminals (Constants and Inputs) ---
 # Rename arguments for clarity
-pset.renameArguments(ARG0='pot_size', ARG1='position', ARG2='stack_size',
+pset.renameArguments(ARG0='pot_size', ARG1='button', ARG2='stack_size',
                     ARG3='opponent_stack_size', ARG4='amount_to_call',
                     ARG5='hand_strength', ARG6='hand_class', ARG7='street')
 
@@ -106,12 +106,15 @@ STREETS = ['PREFLOP', 'FLOP', 'TURN', 'RIVER']
 for street in STREETS:
     pset.addTerminal(street, str)
 
+pset.addTerminal(True, bool)
+pset.addTerminal(False, bool)
+
 # --- 2. DEAP Toolbox Setup ---
 
 # Define the fitness criteria: maximize winnings
 creator.create("FitnessMax", base.Fitness, weights=(1.0,))
 # Define the individual: a program tree with the defined fitness
-creator.create("Individual", gp.Tree, fitness=creator.FitnessMax)
+creator.create("Individual", gp.PrimitiveTree, fitness=creator.FitnessMax)
 
 toolbox = base.Toolbox()
 
@@ -131,27 +134,6 @@ toolbox.register("compile", gp.compile, pset=pset)
 HAND_STRENGTH_MAP = {i: strength for i, strength in enumerate(np.linspace(0, 1, len(HAND_CLASSES)))}
 STREET_MAP = {0: 'PREFLOP', 1: 'FLOP', 2: 'TURN', 3: 'RIVER'}
 
-def obs_to_args(obs, player_id):
-    """Translates the observation dictionary from the gym to a list of arguments."""
-    opponent_id = 1 - player_id
-    
-    # Simple hand strength: map hand class index to a 0-1 float
-    hand_class_idx = obs['hand_class_idx'][player_id]
-    hand_strength = HAND_STRENGTH_MAP.get(hand_class_idx, 0.0)
-    hand_class_str = HAND_CLASSES[hand_class_idx]
-    
-    args = [
-        float(obs['pot_size']),
-        float(obs['position'][player_id]),
-        float(obs['stack_size'][player_id]),
-        float(obs['stack_size'][opponent_id]),
-        float(obs['amount_to_call'][player_id]),
-        hand_strength,
-        hand_class_str,
-        STREET_MAP[obs['street']]
-    ]
-    return args
-
 
 class ASTAgent(BaseAgent):
     def __init__(self, dealer: Any, position: int, ast: Any):
@@ -161,30 +143,63 @@ class ASTAgent(BaseAgent):
 
     # Value agent bets according to their hand strength
     def act(self, obs: clubs.poker.engine.ObservationDict) -> int:
-        community_cards = obs['community_cards']
+        # collect ast inputs (pot_size, button, stack_size, opponent_stack_size, amount_to_call, hand_strength, hand_class, street)
         hole_cards = obs['hole_cards']
+        community_cards = obs['community_cards']
 
-        hands_dict = self.dealer.evaluator.table.hand_dict
+        pot_size = obs['pot']
+        button = self.dealer.button == self.position
+        stack_size = obs['stacks'][self.position]
+        opponent_stack_size = obs['stacks'][self.position - 1]
+        amount_to_call = obs['call']
         hand_strength = self.dealer.evaluator.evaluate(hole_cards, community_cards)
-        pot = obs['pot']
-        call = obs['call']
-
-        # bet according to value
-        if hand_strength < hands_dict['two pair']['cumulative unsuited']:
-            return pot
+        hands_dict = self.dealer.evaluator.table.hand_dict
+        
+        if hand_strength < hands_dict['straight flush']['cumulative unsuited']:
+            hand_class = HAND_CLASSES[-1]
+        elif hand_strength < hands_dict['four of a kind']['cumulative unsuited']:
+            hand_class = HAND_CLASSES[-2]
+        elif hand_strength < hands_dict['full house']['cumulative unsuited']:
+            hand_class = HAND_CLASSES[-3]
+        elif hand_strength < hands_dict['flush']['cumulative unsuited']:
+            hand_class = HAND_CLASSES[-4]
+        elif hand_strength < hands_dict['straight']['cumulative unsuited']:
+            hand_class = HAND_CLASSES[-5]
+        elif hand_strength < hands_dict['three of a kind']['cumulative unsuited']:
+            hand_class = HAND_CLASSES[-6]
+        elif hand_strength < hands_dict['two pair']['cumulative unsuited']:
+            hand_class = HAND_CLASSES[-7]
         elif hand_strength < hands_dict['pair']['cumulative unsuited']:
-            return max(0, call)
-        else:
-            return 0
+            hand_class = HAND_CLASSES[-8]
+        else: # High Card
+            hand_class = HAND_CLASSES[-9]
+            
+
+        if len(obs['community_cards']) == 0:
+            street = STREETS[0]
+        elif len(obs['community_cards']) == 3:
+            street = STREETS[1]
+        elif len(obs['community_cards']) == 4:
+            street = STREETS[2]
+        else: # River - 5 community cards
+            street = STREETS[3]
+        
+
+        # execute AST logic
+        action = self.ast(pot_size, button, stack_size, opponent_stack_size, amount_to_call, hand_strength, hand_class, street)
+        bet = action * pot_size
+
+        return bet
 
 
-def evaluate_agents(agent1_logic, agent2_logic):
+def evaluate_agents(agent1_logic, agent2_logic, max_hands=500):
     """
     Simulates a heads-up poker match between two compiled agents.
     Returns the final winnings for each agent.
     """
     
     winnings = [0.0, 0.0]
+    num_hands = 0
 
     # Instantiate heads up poker env
     env = PokerEnv(
@@ -211,7 +226,7 @@ def evaluate_agents(agent1_logic, agent2_logic):
     game_over = False
 
     # Simulate poker game
-    while True:
+    while True and num_hands < max_hands:
 
         bet = env.act(obs)
         obs, rewards, done, info = env.step(bet)
@@ -220,11 +235,14 @@ def evaluate_agents(agent1_logic, agent2_logic):
             game_over = 0 in env.dealer.stacks
 
         if game_over:
-            winnings[0] += env.dealer.stacks[0]
-            winnings[1] += env.dealer.stacks[1]
+            winnings[0] = env.dealer.stacks[0]
+            winnings[1] = env.dealer.stacks[1]
             break
 
         if all(done):
+            num_hands += 1
+            winnings[0] += rewards[0]
+            winnings[1] += rewards[1]
             obs = env.reset()
                 
     return winnings[0], winnings[1]
