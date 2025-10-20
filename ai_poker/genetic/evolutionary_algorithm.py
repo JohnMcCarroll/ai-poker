@@ -80,8 +80,9 @@ pset.addPrimitive(operator.sub, [float, float], float)
 pset.addPrimitive(operator.mul, [float, float], float)
 pset.addPrimitive(protected_div, [float, float], float)
 
-# Conditional operator
+# Conditional operators
 pset.addPrimitive(if_then_else, [bool, OUTPUT_TYPE, OUTPUT_TYPE], OUTPUT_TYPE)
+pset.addPrimitive(if_then_else, [bool, str, str], str, name="if_then_else_str")
 
 
 # --- Add Terminals (Constants and Inputs) ---
@@ -347,7 +348,7 @@ def main():
     print("\n--- Fossil Record (Best of Each Generation) ---")
     for gen, data in fossil_record.items():
         print(f"Gen {gen}: Fitness = {data['fitness']:.2f}")
-        # print(f"  Code: {data['individual']}") # Uncomment to see the evolved code
+        print(f"  Code: {data['individual']}") # Uncomment to see the evolved code
 
     # Plotting
     gen_nums = logbook.select("gen")
