@@ -4,7 +4,7 @@ import numpy as np
 from deap import base, creator, tools, gp
 import matplotlib.pyplot as plt
 from ai_poker.mvp.poker_env import PokerEnv
-from ai_poker.mvp.agents import RandomAgent, RandomAgent2
+from ai_poker.mvp.agents import RandomAgent, RandomAgent2, BaseAgent
 from ai_poker.genetic.simple_agents import ManiacAgent, StationAgent, SimpleValueAgent
 from clubs_gym.agent.base import BaseAgent
 from typing import Any
@@ -13,6 +13,7 @@ import random
 import os
 import pickle
 import datetime
+import inspect
 
 
 # --- 1. Define Primitives and Terminals ---
@@ -137,7 +138,7 @@ STREET_MAP = {0: 'PREFLOP', 1: 'FLOP', 2: 'TURN', 3: 'RIVER'}
 
 
 class ASTAgent(BaseAgent):
-    def __init__(self, dealer: Any, position: int, ast: Any):
+    def __init__(self, dealer: Any, position: int, ast: Any, **kwargs):
         self.dealer = dealer
         self.position = position
         self.ast = ast
@@ -217,9 +218,22 @@ def evaluate_agents(agent1_logic, agent2_logic, max_hands=500):
         start_stack=500,
         low_end_straight=True
     )
-    env.register_agents([ASTAgent(dealer=env.dealer, position=0, ast=agent1_logic), ASTAgent(dealer=env.dealer, position=1, ast=agent2_logic)])
-    obs = env.reset()
 
+    # Instantiate agents
+    player1 = agent1_logic
+    player2 = agent2_logic
+    if inspect.isclass(agent1_logic):
+        player1 = agent1_logic(dealer=env.dealer, position=0)
+    else:
+        player1 = ASTAgent(dealer=env.dealer, position=0, ast=agent1_logic)
+        
+    if inspect.isclass(agent2_logic):
+        player2 = agent2_logic(dealer=env.dealer, position=1)
+    else:
+        player2 = ASTAgent(dealer=env.dealer, position=1, ast=agent2_logic)
+
+    env.register_agents([player1, player2])
+    obs = env.reset()
 
     done = [False]
     game_over = False
@@ -259,8 +273,8 @@ toolbox.decorate("mutate", gp.staticLimit(key=operator.attrgetter("height"), max
 def main():
     random.seed(42)
     
-    POP_SIZE = 50
-    N_GEN = 10
+    POP_SIZE = 100
+    N_GEN = 100
     CXPB, MUTPB = 0.7, 0.2
     
     pop = toolbox.population(n=POP_SIZE)
@@ -291,12 +305,29 @@ def main():
                 agent1_logic = toolbox.compile(expr=pop[i])
                 agent2_logic = toolbox.compile(expr=pop[j])
 
-                winnings1, winnings2, num_hands = toolbox.evaluate(agent1_logic, agent2_logic)
+                winnings1, winnings2, num_hands = toolbox.evaluate(agent1_logic, agent2_logic, max_hands=100)
                 
                 winnings_map[i] += winnings1
                 winnings_map[j] += winnings2
                 num_hands_map[i] += num_hands
                 num_hands_map[j] += num_hands
+
+        # Each individual plays against our bench of simple and legacy agents
+        bench = [RandomAgent, RandomAgent2, StationAgent, ManiacAgent, SimpleValueAgent]
+        bench += [gen['individual'] for gen in fossil_record.values()]
+        bench_size = len(bench)
+
+        for i in range(len(pop)):
+            for opponent in bench:
+                # ready opponent
+                if inspect.isclass(opponent):
+                    winnings, opp_winnings, num_hands = toolbox.evaluate(agent1_logic, opponent, max_hands=100)
+                else:
+                    opponent_logic = toolbox.compile(expr=opponent)
+                    winnings, opp_winnings, num_hands = toolbox.evaluate(agent1_logic, opponent_logic, max_hands=100)
+
+                winnings_map[i] += winnings
+                num_hands_map[i] += num_hands
 
         # Assign fitness based on total winnings
         for i, ind in enumerate(pop):
