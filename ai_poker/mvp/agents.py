@@ -4,6 +4,10 @@ import random
 
 
 class RandomAgent(BaseAgent):
+
+    def __init__(self, **kwargs):
+        pass
+
     def act(self, obs: clubs.poker.engine.ObservationDict) -> int:
         prob = random.random()
         if prob < 0.3334:
@@ -15,6 +19,10 @@ class RandomAgent(BaseAgent):
 
 
 class RandomAgent2(BaseAgent):
+
+    def __init__(self, **kwargs):
+        pass
+
     def act(self, obs: clubs.poker.engine.ObservationDict) -> int:
         prob = random.random()
         if prob < 0.5:

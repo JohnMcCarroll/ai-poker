@@ -5,6 +5,10 @@ import random
 
 
 class ManiacAgent(BaseAgent):
+
+    def __init__(self, **kwargs):
+        pass
+
     # Maniac applies maximum pressure
     def act(self, obs: clubs.poker.engine.ObservationDict) -> int:
         prob = random.random()
@@ -14,6 +18,10 @@ class ManiacAgent(BaseAgent):
 
 
 class StationAgent(BaseAgent):
+
+    def __init__(self, **kwargs):
+        pass
+
     # Station plays extremely passive
     def act(self, obs: clubs.poker.engine.ObservationDict) -> int:
         bet = obs['call']
@@ -21,7 +29,7 @@ class StationAgent(BaseAgent):
 
 
 class SimpleValueAgent(BaseAgent):
-    def __init__(self, dealer: Any, position: int):
+    def __init__(self, dealer: Any, position: int, **kwargs):
         self.dealer = dealer
         self.position = position
 
