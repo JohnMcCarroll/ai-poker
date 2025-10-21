@@ -14,6 +14,8 @@ import os
 import pickle
 import datetime
 import inspect
+from collections import Counter, namedtuple
+from itertools import combinations
 
 
 # --- 1. Define Primitives and Terminals ---
@@ -21,6 +23,9 @@ import inspect
 INITAL_MAX_TREE_HEIGHT = 5
 MAX_TREE_HEIGHT = 90
 VISUALIZE = False
+RANK_ORDER = {
+    None: 0., '2': 2., '3': 3., '4': 4., '5': 5., '6': 6., '7': 7., '8': 8., '9': 9., 'T': 10., 'J': 11., 'Q': 12., 'K': 13., 'A': 14.
+}
 
 # Define a protected division function to avoid ZeroDivisionError
 def protected_div(left, right):
@@ -45,13 +50,27 @@ OUTPUT_TYPE = float
 # We will map the gym's observation dictionary to these arguments.
 ARGUMENT_TYPES = [
     float, # pot_size
-    bool, # button (True for small blind, False for big blind)
+    bool,  # button (True for small blind, False for big blind)
     float, # stack_size
     float, # opponent_stack_size
     float, # amount_to_call
     float, # hand_strength (a value from 0.0 to 1.0)
     str,   # hand_class (e.g., 'PAIR', 'FLUSH')
     str,   # street (e.g., 'PREFLOP', 'FLOP')
+
+    float,        # 'board_highest_card',
+    float,        # 'board_num_pairs',
+    float,        # 'board_num_trips', 
+    float,        # 'board_num_quads',
+    float,        # 'board_num_same_suits',
+    float,        # 'board_smallest_3_card_span',
+
+    bool,        # 'hole_suited',
+    float,        # 'hole_highest_card',
+    bool,        # 'hole_paired',
+    bool,        # 'hole_flush_draw',
+    bool,        # 'hole_open_straight_draw',
+    bool,        # 'hole_gutshot_straight_draw'
 ]
 
 # Create the Primitive Set
@@ -88,12 +107,35 @@ pset.addPrimitive(if_then_else, [bool, str, str], str, name="if_then_else_str")
 
 # --- Add Terminals (Constants and Inputs) ---
 # Rename arguments for clarity
-pset.renameArguments(ARG0='pot_size', ARG1='button', ARG2='stack_size',
-                    ARG3='opponent_stack_size', ARG4='amount_to_call',
-                    ARG5='hand_strength', ARG6='hand_class', ARG7='street')
+pset.renameArguments(
+    ARG0='pot_size', 
+    ARG1='button', 
+    ARG2='stack_size',
+    ARG3='opponent_stack_size', 
+    ARG4='amount_to_call',
+    ARG5='hand_strength', 
+    ARG6='hand_class', 
+    ARG7='street',
+
+    ARG8='board_highest_card',
+    ARG9='board_num_pairs',
+    ARG10='board_num_trips', 
+    ARG11='board_num_quads',
+    ARG12='board_num_same_suits',
+    ARG13='board_smallest_3_card_span',
+
+    ARG14='hole_suited',
+    ARG15='hole_highest_card',
+    ARG16='hole_paired',
+    ARG17='hole_flush_draw',
+    ARG18='hole_open_straight_draw',
+    ARG19='hole_gutshot_straight_draw'
+
+
+)
 
 # Add float constants
-FLOAT_CONSTANTS = [0.0, 0.1, 0.25, 0.333, 0.5, 0.667, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0, 3.0]
+FLOAT_CONSTANTS = [0.0, 0.1, 0.25, 0.333, 0.5, 0.667, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0]
 for val in FLOAT_CONSTANTS:
     pset.addTerminal(val, float)
 
@@ -137,6 +179,160 @@ HAND_STRENGTH_MAP = {i: strength for i, strength in enumerate(np.linspace(0, 1, 
 STREET_MAP = {0: 'PREFLOP', 1: 'FLOP', 2: 'TURN', 3: 'RIVER'}
 
 
+# Define a simple Card namedtuple for clarity and ease of use.
+# Assumes ranks are integers: 2-10, J=11, Q=12, K=13, A=14.
+# Assumes suits are strings: 's' (spades), 'h' (hearts), 'd' (diamonds), 'c' (clubs).
+# Card = namedtuple('Card', ['rank', 'suit'])
+
+def has_flush_draw(hole_cards, community_cards):
+    """
+    Checks if there are exactly 4 cards of the same suit among the combined
+    hole and community cards.
+
+    Args:
+        hole_cards (list[Card]): A list of 2 Card objects for the player.
+        community_cards (list[Card]): A list of 3 to 5 Card objects.
+
+    Returns:
+        bool: True if a flush draw exists, False otherwise.
+    """
+    all_cards = hole_cards + community_cards
+    if len(all_cards) < 4:
+        return False
+        
+    suit_counts = Counter(card.suit for card in all_cards)
+    
+    # A flush draw is defined as having 4 cards of the same suit.
+    # We check for a count of 4. A count of 5 or more is a made flush.
+    return 4 in suit_counts.values()
+
+def has_straight_draw(hole_cards, community_cards):
+    """
+    Checks for an open-ended straight draw (four contiguous cards).
+    For example, holding 5,6 with a flop of 7,8,K.
+
+    Args:
+        hole_cards (list[Card]): A list of 2 Card objects for the player.
+        community_cards (list[Card]): A list of 3 to 5 Card objects.
+
+    Returns:
+        bool: True if an open-ended straight draw exists, False otherwise.
+    """
+    all_cards = hole_cards + community_cards
+    if len(all_cards) < 4:
+        return False
+
+    # Get unique ranks to handle pairs correctly.
+    ranks = sorted(list(set(RANK_ORDER[card.rank] for card in all_cards)))
+
+    # Add Ace as a low card (rank 1) for A-2-3-4-5 straights
+    if 14 in ranks: # 14 is the rank for Ace
+        ranks.insert(0, 1)
+
+    if len(ranks) < 4:
+        return False
+
+    # Check all 4-card combinations for a contiguous sequence.
+    # A sequence of 4 cards is contiguous if the difference between the
+    # highest and lowest card is exactly 3.
+    for combo in combinations(ranks, 4):
+        if (max(combo) - min(combo)) == 3:
+            return True
+            
+    return False
+
+#TODO: fix count logic
+def count_straight_draws(hole_cards, community_cards):
+    """
+    Counts the number of open-ended (contiguous) and gapped (gutshot)
+    straight draws.
+
+    - Contiguous (Open-ended): 4 cards in a sequence, e.g., 5-6-7-8.
+    - Gapped (Gutshot): 4 cards that span 5 ranks, e.g., 5-6-8-9.
+
+    Args:
+        hole_cards (list[Card]): A list of 2 Card objects for the player.
+        community_cards (list[Card]): A list of 3 to 5 Card objects.
+
+    Returns:
+        tuple[int, int]: A tuple containing (contiguous_draw_count, gapped_draw_count).
+    """
+    all_cards = hole_cards + community_cards
+    if len(all_cards) < 4:
+        return (0, 0)
+
+    ranks = sorted(list(set(RANK_ORDER[card.rank] for card in all_cards)))
+
+    if 14 in ranks:
+        ranks.insert(0, 1)
+
+    if len(ranks) < 4:
+        return (0, 0)
+
+    contiguous_count = 0
+    gapped_count = 0
+
+    # Check every possible combination of 4 unique ranks.
+    for combo in combinations(ranks, 4):
+        rank_span = max(combo) - min(combo)
+        
+        # 4 ranks spanning 4 values is a contiguous draw (e.g., 8,7,6,5 -> 8-5=3)
+        if rank_span == 3:
+            contiguous_count += 1
+        # 4 ranks spanning 5 values is a gapped draw (e.g., 9,8,6,5 -> 9-5=4)
+        elif rank_span == 4:
+            gapped_count += 1
+            
+    return contiguous_count, gapped_count
+
+
+def find_highest_card(community_cards):
+    highest_rank = 0
+    for card in community_cards:
+        if RANK_ORDER[card.rank] > highest_rank:
+            highest_rank = RANK_ORDER[card.rank]
+    return highest_rank
+
+def num_suited(community_cards):
+
+    all_cards = community_cards
+    if len(all_cards) < 3:
+        return 0.0
+    
+    suit_counts = Counter(card.suit for card in all_cards)
+    
+    # A flush draw is defined as having 4 cards of the same suit.
+    # We check for a count of 4. A count of 5 or more is a made flush.
+    return max(suit_counts.values())
+
+def num_pairs_trips_quads(community_cards):
+    rank_counts = Counter(card.rank for card in community_cards)
+    num_pairs = sum(1 for rank_count in rank_counts.values() if rank_count >= 2)
+    num_trips = sum(1 for rank_count in rank_counts.values() if rank_count >= 3)
+    num_quads = sum(1 for rank_count in rank_counts.values() if rank_count >= 4)
+    return num_pairs, num_trips, num_quads
+
+
+def find_smallest_3_card_span(community_cards):
+    all_cards = community_cards
+    if len(all_cards) < 3:
+        return 0.0
+    
+    ranks = sorted(list(set(RANK_ORDER[card.rank] for card in all_cards)))
+
+    if 14 in ranks:
+        ranks.insert(0, 1)
+
+    min_span = 20.0
+
+    # Check every possible combination of 4 unique ranks.
+    for combo in combinations(ranks, 3):
+        rank_span = max(combo) - min(combo)
+        if rank_span < min_span:
+            min_span = rank_span
+    return min_span
+
+
 class ASTAgent(BaseAgent):
     def __init__(self, dealer: Any, position: int, ast: Any, **kwargs):
         self.dealer = dealer
@@ -146,6 +342,7 @@ class ASTAgent(BaseAgent):
     # Value agent bets according to their hand strength
     def act(self, obs: clubs.poker.engine.ObservationDict) -> int:
         # collect ast inputs (pot_size, button, stack_size, opponent_stack_size, amount_to_call, hand_strength, hand_class, street)
+        # mvp basics
         hole_cards = obs['hole_cards']
         community_cards = obs['community_cards']
 
@@ -154,7 +351,7 @@ class ASTAgent(BaseAgent):
         stack_size = obs['stacks'][self.position]
         opponent_stack_size = obs['stacks'][self.position - 1]
         amount_to_call = obs['call']
-        hand_strength = self.dealer.evaluator.evaluate(hole_cards, community_cards)
+        hand_strength = self.dealer.evaluator.evaluate(hole_cards, community_cards) / 7462 # divide by max hand ranks
         hands_dict = self.dealer.evaluator.table.hand_dict
         
         if hand_strength < hands_dict['straight flush']['cumulative unsuited']:
@@ -185,8 +382,50 @@ class ASTAgent(BaseAgent):
         else: # River - 5 community cards
             street = STREETS[3]
 
+        # board texture
+        board_highest_card = find_highest_card(community_cards=community_cards)
+        board_num_same_suits = num_suited(community_cards=community_cards)
+        board_num_pairs, board_num_trips, board_num_quads = num_pairs_trips_quads(community_cards=community_cards)
+        board_smallest_3_card_span = find_smallest_3_card_span(community_cards=community_cards)
+
+        # player's hand
+        hole_suited = hole_cards[0].suit == hole_cards[1].suit
+        hole_highest_card = max(RANK_ORDER[hole_cards[0].rank],RANK_ORDER[hole_cards[1].rank])
+        hole_paired = hole_cards[0].rank == hole_cards[1].rank
+        hole_flush_draw = has_flush_draw(hole_cards=hole_cards, community_cards=community_cards)
+        open_straight_draws, gutshot_straight_draws = count_straight_draws(hole_cards=hole_cards, community_cards=community_cards)
+        hole_open_straight_draw = open_straight_draws >= 1 or gutshot_straight_draws >= 2
+        hole_gutshot_straight_draw = gutshot_straight_draws >= 1
+
+        # opponent's statistics
+
+
+
         # execute AST logic
-        action = self.ast(pot_size, button, stack_size, opponent_stack_size, amount_to_call, hand_strength, hand_class, street)
+        action = self.ast(
+            pot_size, 
+            button, 
+            stack_size, 
+            opponent_stack_size, 
+            amount_to_call, 
+            hand_strength, 
+            hand_class, 
+            street,
+
+            board_highest_card,
+            board_num_pairs,
+            board_num_trips, 
+            board_num_quads,
+            board_num_same_suits,
+            board_smallest_3_card_span,
+
+            hole_suited,
+            hole_highest_card,
+            hole_paired,
+            hole_flush_draw,
+            hole_open_straight_draw,
+            hole_gutshot_straight_draw,
+        )
         bet = action * pot_size
 
         return bet
