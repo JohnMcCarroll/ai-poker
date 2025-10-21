@@ -251,8 +251,8 @@ toolbox.decorate("mutate", gp.staticLimit(key=operator.attrgetter("height"), max
 def main():
     random.seed(42)
     
-    POP_SIZE = 100
-    N_GEN = 100
+    POP_SIZE = 50
+    N_GEN = 1
     CXPB, MUTPB = 0.7, 0.2
     
     pop = toolbox.population(n=POP_SIZE)
@@ -334,7 +334,19 @@ def main():
 
     print("--- Evolution Finished ---")
 
-    # --- Print and Plot Results ---
+    # --- Save, Print, and Plot Results ---
+    # Save fossil record
+    import os
+    import pickle
+    import datetime
+
+    cur_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    save_id = f"fossils_v0.1_{cur_time}"
+    save_path = f"{os.path.dirname(__file__)}\\fossils\\{save_id}.pkl" # Windows file path format
+    with open(save_path, 'wb') as f:
+        pickle.dump(fossil_record, f)
+
+
     print("\n--- Fossil Record (Best of Each Generation) ---")
     for gen, data in fossil_record.items():
         print(f"Gen {gen}: Fitness = {data['fitness']:.2f}")
