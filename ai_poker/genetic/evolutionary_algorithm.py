@@ -10,8 +10,16 @@ from clubs_gym.agent.base import BaseAgent
 from typing import Any
 import clubs
 import random
+import os
+import pickle
+import datetime
+
 
 # --- 1. Define Primitives and Terminals ---
+
+INITAL_MAX_TREE_HEIGHT = 5
+MAX_TREE_HEIGHT = 90
+VISUALIZE = False
 
 # Define a protected division function to avoid ZeroDivisionError
 def protected_div(left, right):
@@ -114,7 +122,7 @@ toolbox = base.Toolbox()
 # Attribute generator:
 # We use genHalfAndHalf to create a mix of full trees and growing trees,
 # which promotes diversity in the initial population.
-toolbox.register("expr", gp.genHalfAndHalf, pset=pset, min_=1, max_=3)
+toolbox.register("expr", gp.genHalfAndHalf, pset=pset, min_=1, max_=INITAL_MAX_TREE_HEIGHT)
 
 # Structure initializers:
 toolbox.register("individual", tools.initIterate, creator.Individual, toolbox.expr)
@@ -238,12 +246,12 @@ def evaluate_agents(agent1_logic, agent2_logic, max_hands=500):
 toolbox.register("evaluate", evaluate_agents)
 toolbox.register("select", tools.selBest) # Select the best X individuals
 toolbox.register("mate", gp.cxOnePoint)
-toolbox.register("expr_mut", gp.genFull, min_=0, max_=2)
+toolbox.register("expr_mut", gp.genFull, min_=0, max_=INITAL_MAX_TREE_HEIGHT)
 toolbox.register("mutate", gp.mutUniform, expr=toolbox.expr_mut, pset=pset)
 
 # Decorate crossover and mutation to prevent code bloat
-toolbox.decorate("mate", gp.staticLimit(key=operator.attrgetter("height"), max_value=17))       # can we increase limit?
-toolbox.decorate("mutate", gp.staticLimit(key=operator.attrgetter("height"), max_value=17))
+toolbox.decorate("mate", gp.staticLimit(key=operator.attrgetter("height"), max_value=MAX_TREE_HEIGHT))       # can we increase limit?
+toolbox.decorate("mutate", gp.staticLimit(key=operator.attrgetter("height"), max_value=MAX_TREE_HEIGHT))
 
 
 # --- 4. The Main Evolutionary Loop ---
@@ -252,7 +260,7 @@ def main():
     random.seed(42)
     
     POP_SIZE = 50
-    N_GEN = 1
+    N_GEN = 10
     CXPB, MUTPB = 0.7, 0.2
     
     pop = toolbox.population(n=POP_SIZE)
@@ -306,8 +314,14 @@ def main():
         best_ind = tools.selBest(pop, 1)[0]
         fossil_record[gen] = {
             'fitness': best_ind.fitness.values[0],
-            'individual': str(best_ind)
+            'individual': best_ind
         }
+
+        # --- Visualize generation's best individual ---
+        visualize = False
+        if visualize:
+            print('Best Individual of Generation:')
+            print(str(best_ind))
 
         # --- Selection ---
         num_survivors = POP_SIZE // 2
@@ -336,10 +350,6 @@ def main():
 
     # --- Save, Print, and Plot Results ---
     # Save fossil record
-    import os
-    import pickle
-    import datetime
-
     cur_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     save_id = f"fossils_v0.1_{cur_time}"
     save_path = f"{os.path.dirname(__file__)}\\fossils\\{save_id}.pkl" # Windows file path format
@@ -350,7 +360,7 @@ def main():
     print("\n--- Fossil Record (Best of Each Generation) ---")
     for gen, data in fossil_record.items():
         print(f"Gen {gen}: Fitness = {data['fitness']:.2f}")
-        print(f"  Code: {data['individual']}") # Uncomment to see the evolved code
+        print(f"  Code: {str(data['individual'])}") # Uncomment to see the evolved code
 
     # Plotting
     gen_nums = logbook.select("gen")
