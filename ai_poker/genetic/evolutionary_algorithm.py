@@ -71,6 +71,12 @@ ARGUMENT_TYPES = [
     bool,        # 'hole_flush_draw',
     bool,        # 'hole_open_straight_draw',
     bool,        # 'hole_gutshot_straight_draw'
+
+    str,        # 'preflop_opponent_line'
+    str,         # 'flop_opponent_line'
+    str,         # 'turn_opponent_line'
+    str,         # 'river_opponent_line'
+
 ]
 
 # Create the Primitive Set
@@ -129,7 +135,12 @@ pset.renameArguments(
     ARG16='hole_paired',
     ARG17='hole_flush_draw',
     ARG18='hole_open_straight_draw',
-    ARG19='hole_gutshot_straight_draw'
+    ARG19='hole_gutshot_straight_draw',
+
+    ARG20='preflop_opponent_line',
+    ARG21='flop_opponent_line',
+    ARG22='turn_opponent_line',
+    ARG23='river_opponent_line',
 
 
 )
@@ -152,6 +163,11 @@ for street in STREETS:
 
 pset.addTerminal(True, bool)
 pset.addTerminal(False, bool)
+
+# betting line strings
+LINES = ['FOLD', "DONK_BET", "BET", "RAISE", "CHECK", "CALL", "NONE"]
+for line in LINES:
+    pset.addTerminal(line, str)
 
 # --- 2. DEAP Toolbox Setup ---
 
@@ -334,10 +350,154 @@ def find_smallest_3_card_span(community_cards):
 
 
 class ASTAgent(BaseAgent):
-    def __init__(self, dealer: Any, position: int, ast: Any, **kwargs):
+    def __init__(self, dealer: Any, seat_id: int, ast: Any, **kwargs):
         self.dealer = dealer
-        self.position = position
         self.ast = ast
+        self.hand_count = 0
+
+
+        self.player_id = seat_id
+        self.opponent_id = 1 - self.player_id
+        
+        # This will store the history indices for each street
+        # e.g., {'PREFLOP': {'start': 0, 'end': 4}, 'FLOP': {'start': 4, 'end': 6}}
+        self.street_boundaries = {}
+        
+        # This will store the final parsed lines for both players
+        # e.g., {0: {'FLOP': 'CHECK-RAISE'}, 1: {'FLOP': 'BET-CALL'}}
+        self.lines_by_street = {0: {}, 1: {}}
+        
+        # Who was the last aggressor in the preflop action?
+        self.preflop_aggressor = None
+
+    def get_previous_street(self, street):
+            """Helper to get the previous street name."""
+            street_order = ['PREFLOP', 'FLOP', 'TURN', 'RIVER']
+            try:
+                idx = street_order.index(street)
+                return street_order[idx - 1] if idx > 0 else None
+            except ValueError:
+                return None
+            
+    def update_street_boundaries(self, street, history_len):
+        """
+        Called on every action to log the start/end of betting rounds
+        in the flat history list.
+        """
+        if street not in self.street_boundaries:
+            # This is the first action of a new street
+            self.street_boundaries[street] = {'start': history_len}
+            
+            # Find the previous street and set its 'end'
+            prev_street = self.get_previous_street(street)
+            if prev_street and prev_street in self.street_boundaries:
+                if 'end' not in self.street_boundaries[prev_street]:
+                    self.street_boundaries[prev_street]['end'] = history_len
+
+    def _parse_street_line(self, street, street_history):
+        """
+        The core logic. Parses a slice of history for one street
+        and returns the betting lines for both players.
+        """
+        player_actions = {0: [], 1: []}
+        player_investment = {0: 0, 1: 0}
+        current_bet_level = 0
+        last_aggressor = None
+        
+        # Preflop is special: it has blinds.
+        if street == 'PREFLOP':
+            player_investment = {0: 1, 1: 2} # SB=1, BB=2
+            current_bet_level = 2
+            last_aggressor = 1 # The Big Blind is the initial "aggressor"
+        
+        # Who is first to act on this street?
+        # Postflop, SB (pos 0) is always first.
+        # Preflop, SB (pos 0) is also first.
+        first_to_act = 0
+        
+        # Check for a donk-bet opportunity
+        # A donk-bet is when an out-of-position player
+        # (who was NOT the preflop aggressor) bets first.
+        is_donk_bet_opportunity = (
+            street != 'PREFLOP' and
+            self.preflop_aggressor is not None and
+            first_to_act != self.preflop_aggressor
+        )
+        
+        actions_this_street = 0
+
+        for (pos, bet, fold) in street_history:
+            amount_to_call = current_bet_level - player_investment[pos]
+            action_str = "None"
+
+            if fold:
+                action_str = "FOLD"
+            elif bet > current_bet_level:
+                # This is a Bet or a Raise
+                if amount_to_call == 0:
+                    # No bet to call, so this is a "BET"
+                    if (is_donk_bet_opportunity and 
+                        pos == first_to_act and 
+                        actions_this_street == 0):
+                        action_str = "DONK_BET"
+                    else:
+                        action_str = "BET"
+                else:
+                    # There was a bet to call, so this is a "RAISE"
+                    action_str = "RAISE"
+                
+                current_bet_level = bet
+                last_aggressor = pos
+            
+            elif bet == current_bet_level:
+                # This is a Check or a Call
+                if amount_to_call == 0:
+                    action_str = "CHECK"
+                else:
+                    action_str = "CALL"
+            
+            player_investment[pos] = bet
+            player_actions[pos].append(action_str)
+            actions_this_street += 1
+        
+        # Combine the action lists into a single string line
+        lines = {
+            0: '-'.join(player_actions[0]),
+            1: '-'.join(player_actions[1])
+        }
+        
+        return lines, last_aggressor
+
+    def parse_betting_history(self, history):
+        """
+        Orchestrates the parsing of the entire history by street.
+        """
+        # Reset state
+        self.lines_by_street = {0: {}, 1: {}}
+        self.preflop_aggressor = None
+        
+        # Slice the flat history list into a dict of lists by street
+        street_slices = {}
+        for street, bounds in self.street_boundaries.items():
+            start = bounds['start']
+            # .get('end', len(history)) ensures we parse the current, in-progress street
+            end = bounds.get('end', len(history)) 
+            street_slices[street] = history[start:end]
+
+        # Parse Preflop first to find the aggressor
+        if 'PREFLOP' in street_slices:
+            lines, aggressor = self._parse_street_line('PREFLOP', street_slices['PREFLOP'])
+            self.lines_by_street[0]['PREFLOP'] = lines[0]
+            self.lines_by_street[1]['PREFLOP'] = lines[1]
+            self.preflop_aggressor = aggressor # Store for postflop parsing
+
+        # Parse Postflop streets
+        for street in ['FLOP', 'TURN', 'RIVER']:
+            if street in street_slices:
+                lines, _ = self._parse_street_line(street, street_slices[street])
+                self.lines_by_street[0][street] = lines[0]
+                self.lines_by_street[1][street] = lines[1]
+    
 
     # Value agent bets according to their hand strength
     def act(self, obs: clubs.poker.engine.ObservationDict) -> int:
@@ -347,9 +507,9 @@ class ASTAgent(BaseAgent):
         community_cards = obs['community_cards']
 
         pot_size = obs['pot']
-        button = self.dealer.button == self.position
-        stack_size = obs['stacks'][self.position]
-        opponent_stack_size = obs['stacks'][self.position - 1]
+        button = self.dealer.button == self.player_id
+        stack_size = obs['stacks'][self.player_id]
+        opponent_stack_size = obs['stacks'][self.player_id - 1]
         amount_to_call = obs['call']
         hand_strength = self.dealer.evaluator.evaluate(hole_cards, community_cards) / 7462 # divide by max hand ranks
         hands_dict = self.dealer.evaluator.table.hand_dict
@@ -397,6 +557,23 @@ class ASTAgent(BaseAgent):
         hole_open_straight_draw = open_straight_draws >= 1 or gutshot_straight_draws >= 2
         hole_gutshot_straight_draw = gutshot_straight_draws >= 1
 
+        # betting line
+        history = self.dealer.history
+        if len(history) <= 1:
+            # we're preflop in a new hand
+            self.hand_count += 1
+        self.update_street_boundaries(street, len(history))
+        
+        # 2. Re-parse the entire history on every action
+        # This ensures our state is always up-to-date.
+        self.parse_betting_history(history)
+        
+        # 3. Get the opponent's line for the current street
+        preflop_opponent_line = self.lines_by_street[self.opponent_id].get("PREFLOP", "NONE")
+        flop_opponent_line = self.lines_by_street[self.opponent_id].get("FLOP", "NONE")
+        turn_opponent_line = self.lines_by_street[self.opponent_id].get("TURN", "NONE")
+        river_opponent_line = self.lines_by_street[self.opponent_id].get("RIVER", "NONE")
+        
         # opponent's statistics
 
 
@@ -425,6 +602,11 @@ class ASTAgent(BaseAgent):
             hole_flush_draw,
             hole_open_straight_draw,
             hole_gutshot_straight_draw,
+
+            preflop_opponent_line,
+            flop_opponent_line,
+            turn_opponent_line,
+            river_opponent_line,
         )
         bet = action * pot_size
 
@@ -462,14 +644,14 @@ def evaluate_agents(agent1_logic, agent2_logic, max_hands=500):
     player1 = agent1_logic
     player2 = agent2_logic
     if inspect.isclass(agent1_logic):
-        player1 = agent1_logic(dealer=env.dealer, position=0)
+        player1 = agent1_logic(dealer=env.dealer, seat_id=0)
     else:
-        player1 = ASTAgent(dealer=env.dealer, position=0, ast=agent1_logic)
+        player1 = ASTAgent(dealer=env.dealer, seat_id=0, ast=agent1_logic)
         
     if inspect.isclass(agent2_logic):
-        player2 = agent2_logic(dealer=env.dealer, position=1)
+        player2 = agent2_logic(dealer=env.dealer, seat_id=1)
     else:
-        player2 = ASTAgent(dealer=env.dealer, position=1, ast=agent2_logic)
+        player2 = ASTAgent(dealer=env.dealer, seat_id=1, ast=agent2_logic)
 
     env.register_agents([player1, player2])
     obs = env.reset()
@@ -577,7 +759,7 @@ def main():
 
         # --- Log statistics ---
         record = mstats.compile(pop)
-        logbook.record(gen=gen, nevals=len(pop), **record)
+        logbook.record(gen=gen, nevals=len(pop)-1 + bench_size, **record)
         print(logbook.stream)
 
         # --- Save the best of the generation ---
@@ -594,27 +776,41 @@ def main():
             print(str(best_ind))
 
         # --- Selection ---
-        num_survivors = POP_SIZE // 2
+        num_survivors = POP_SIZE // 4
         survivors = toolbox.select(pop, k=num_survivors)
         
         # --- Create the next generation ---
-        offspring = [toolbox.clone(ind) for ind in survivors]
+        offspring1 = [toolbox.clone(ind) for ind in survivors]
+        offspring2 = [toolbox.clone(ind) for ind in survivors]
+        offspring3 = [toolbox.clone(ind) for ind in survivors]
         
         # Apply crossover
-        for child1, child2 in zip(offspring[::2], offspring[1::2]):
-            if random.random() < CXPB:
+        from itertools import zip_longest
+
+        for child1, child2 in zip_longest(offspring2[::2], offspring2[1::2], fillvalue=None):
+            if child1 is None: 
+                toolbox.mutate(child2)
+                del child2.fitness.values
+            elif child2 is None:
+                toolbox.mutate(child1)
+                del child1.fitness.values
+            else:
+                # if random.random() < CXPB:
                 toolbox.mate(child1, child2)
                 del child1.fitness.values
                 del child2.fitness.values
         
         # Apply mutation
-        for mutant in offspring:
-            if random.random() < MUTPB:
-                toolbox.mutate(mutant)
-                del mutant.fitness.values
+        for mutant in offspring2:
+            # if random.random() < MUTPB:
+            toolbox.mutate(mutant)
+            del mutant.fitness.values
+
+        # Introduce new organisms
+        offspring3 = [gp.genHalfAndHalf(pset, min_=0, max_=INITAL_MAX_TREE_HEIGHT*2)]*len(survivors)
 
         # The new population is the survivors and their offspring
-        pop[:] = survivors + offspring
+        pop[:] = survivors + offspring1 + offspring2 + offspring3
 
     print("--- Evolution Finished ---")
 
@@ -649,7 +845,9 @@ def main():
     ax1.legend(lns, labs, loc="best")
     
     plt.grid(True)
-    plt.show()
+    # plt.show()
+    fig_save_path = f"{os.path.dirname(__file__)}\\fossils\\{save_id}.png" # Windows file path format
+    plt.savefig(fig_save_path)
 
 
 if __name__ == "__main__":

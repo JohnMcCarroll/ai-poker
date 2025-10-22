@@ -29,9 +29,9 @@ class StationAgent(BaseAgent):
 
 
 class SimpleValueAgent(BaseAgent):
-    def __init__(self, dealer: Any, position: int, **kwargs):
+    def __init__(self, dealer: Any, seat_id: int, **kwargs):
         self.dealer = dealer
-        self.position = position
+        self.position = seat_id
 
     # Value agent bets according to their hand strength
     def act(self, obs: clubs.poker.engine.ObservationDict) -> int:
