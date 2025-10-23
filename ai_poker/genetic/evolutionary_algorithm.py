@@ -16,6 +16,7 @@ import datetime
 import inspect
 from collections import Counter, namedtuple
 from itertools import combinations
+import copy
 
 
 # --- 1. Define Primitives and Terminals ---
@@ -375,10 +376,11 @@ class ASTAgent(BaseAgent):
     def __init__(self, dealer: Any, seat_id: int, ast: Any, **kwargs):
         self.dealer = dealer
         self.ast = ast
-        # self.hand_count = 0
 
         self.player_id = seat_id
         self.opponent_id = 1 - self.player_id
+        self.button = None
+        self.final_observation = {}
         
         # This will store the history indices for each street
         # e.g., {'PREFLOP': {'start': 0, 'end': 4}, 'FLOP': {'start': 4, 'end': 6}}
@@ -509,15 +511,17 @@ class ASTAgent(BaseAgent):
         }
 
         if street == 'PREFLOP':
-            player_investment = {0: 1, 1: 2} # SB=1, BB=2
+            # player_investment = {0: 1, 1: 2} # SB=1, BB=2
+            player_investment[self.button] = 1
+            player_investment[1 - self.button] = 2
             current_bet_level = 2
-            last_aggressor = 1 # BB is initial aggressor
+            last_aggressor = 1 - self.button # BB is initial aggressor
         
-        first_to_act = 0
+        first_to_act_post_flop = 1 - self.button
         is_donk_bet_opportunity = (
             street != 'PREFLOP' and
             self.preflop_aggressor is not None and
-            first_to_act != self.preflop_aggressor
+            first_to_act_post_flop != self.preflop_aggressor
         )
         actions_this_street = 0
 
@@ -532,7 +536,7 @@ class ASTAgent(BaseAgent):
                 if amount_to_call == 0:
                     action_str = "BET"
                     if (is_donk_bet_opportunity and 
-                        pos == first_to_act and 
+                        pos == first_to_act_post_flop and 
                         actions_this_street == 0):
                         action_str = "DONK_BET"
                 else:
@@ -602,7 +606,7 @@ class ASTAgent(BaseAgent):
                     self.preflop_aggressor = agg
                 self.action_counts_by_street[street] = counts
     
-    def hand_complete(self, final_history, reward, final_observation):
+    def hand_complete(self, final_history, reward): #, final_observation):
         """
         !! NEW METHOD !!
         Call this at the END of each hand to update opponent stats.
@@ -612,6 +616,7 @@ class ASTAgent(BaseAgent):
             reward (float): The reward received by *this* player.
             final_observation (dict): The final observation for the hand.
         """
+
         # 1. Parse the final, complete history
         # This sets self.lines_by_street, self.preflop_flags, etc.
         self.parse_betting_history(final_history)
@@ -623,14 +628,14 @@ class ASTAgent(BaseAgent):
         stats['num_hands'] += 1
         
         # 3. Get key hand facts for the OPPONENT
-        opponent_won_hand = reward < 0
+        opponent_won_hand = reward[self.player_id] < 0
         opp_line_preflop = self.lines_by_street[opp_id].get('PREFLOP', '')
         opp_line_flop = self.lines_by_street[opp_id].get('FLOP', '')
         
-        opponent_folded_preflop = 'FOLD' in opp_line_preflop
+        opponent_folded_preflop = 'FOLD' in opp_line_preflop or '' == opp_line_preflop
         opponent_saw_flop = not opponent_folded_preflop
         
-        final_street = self.get_street_from_cards(len(final_observation.get('community_cards', [])))
+        final_street = self.get_street_from_cards(len(self.final_observation.get('community_cards', [])))
         last_action_was_fold = final_history and final_history[-1][2]
 
         # 4. Update stats
@@ -653,6 +658,7 @@ class ASTAgent(BaseAgent):
         # For BB: Any CALL or RAISE (CHECK is not voluntary).
         opp_vpip = False
         if 'FOLD' in opp_line_preflop: pass
+        elif '' == opp_line_preflop: pass
         elif opp_line_preflop == 'CHECK': pass # BB checked
         elif opp_line_preflop == 'CHECK-FOLD': pass
         else:
@@ -793,9 +799,13 @@ class ASTAgent(BaseAgent):
 
         # betting line
         history = self.dealer.history
-        # if len(history) <= 1:
-            # we're preflop in a new hand
-            # self.hand_count += 1
+        if len(history) == 0:
+            # we're preflop in a new hand on the button
+            self.button = self.player_id
+        elif len(history) == 1:
+            # we're preflop in a new hand in the big blind
+            self.button = self.opponent_id
+
         self.update_street_boundaries(street, len(history))
         
         # 2. Re-parse the entire history on every action
@@ -810,6 +820,8 @@ class ASTAgent(BaseAgent):
         
         # opponent's statistics
         # These stats are as-of the *end of the last hand*.
+
+        self.final_observation = copy.deepcopy(obs)
         historical_stats = self.get_opponent_stats()
 
 
@@ -918,6 +930,12 @@ def evaluate_agents(agent1_logic, agent2_logic, max_hands=500):
             num_hands += 1
             winnings[0] += rewards[0]
             winnings[1] += rewards[1]
+
+            if isinstance(player1, ASTAgent):
+                player1.hand_complete(env.dealer.history, rewards)
+            if isinstance(player1, ASTAgent):
+                player2.hand_complete(env.dealer.history, rewards)
+            
             if game_over:
                 break
             obs = env.reset()
