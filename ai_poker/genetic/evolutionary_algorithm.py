@@ -933,7 +933,7 @@ def evaluate_agents(agent1_logic, agent2_logic, max_hands=500):
 
             if isinstance(player1, ASTAgent):
                 player1.hand_complete(env.dealer.history, rewards)
-            if isinstance(player1, ASTAgent):
+            if isinstance(player2, ASTAgent):
                 player2.hand_complete(env.dealer.history, rewards)
             
             if game_over:
