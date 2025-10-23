@@ -947,7 +947,8 @@ def main():
     MAX_HANDS = 250
     EVAL_WITH_LEGACY_INDIVIDUALS = False
     SAVE_EVERY_X_GEN = 100
-    
+    VERSION_NUM = 0.2
+
     pop = toolbox.population(n=POP_SIZE)
     fossil_record = {}
     
@@ -1067,7 +1068,7 @@ def main():
         if gen % SAVE_EVERY_X_GEN == 0:
             # Save fossil record
             cur_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            save_id = f"fossils_v0.2_gen{gen}_{cur_time}"
+            save_id = f"fossils_v{VERSION_NUM}_gen{gen}_{cur_time}"
             save_path = f"{os.path.dirname(__file__)}\\fossils\\{save_id}.pkl" # Windows file path format
             with open(save_path, 'wb') as f:
                 pickle.dump(fossil_record, f)
@@ -1077,7 +1078,7 @@ def main():
     # --- Save, Print, and Plot Results ---
     # Save fossil record
     cur_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    save_id = f"fossils_v0.2_gen{gen_nums}_{cur_time}"
+    save_id = f"fossils_v{VERSION_NUM}_gen{gen_nums}_{cur_time}"
     save_path = f"{os.path.dirname(__file__)}\\fossils\\{save_id}.pkl" # Windows file path format
     with open(save_path, 'wb') as f:
         pickle.dump(fossil_record, f)
