@@ -77,6 +77,18 @@ ARGUMENT_TYPES = [
     str,         # 'turn_opponent_line'
     str,         # 'river_opponent_line'
 
+    float,      # num_hands
+    float,      # VPIP
+    float,      # PFR
+    float,      # 3BET
+    float,      # WTSD
+    float,      # W$SD
+    float,      # WWSF
+    float,      # AF
+    float,      # CBET%
+    float,      # DONK%
+    float,      # CHECKRAISE%
+
 ]
 
 # Create the Primitive Set
@@ -142,7 +154,17 @@ pset.renameArguments(
     ARG22='turn_opponent_line',
     ARG23='river_opponent_line',
 
-
+    ARG24='num_hands',
+    ARG25='VPIP',
+    ARG26='PFR_PCT',
+    ARG27='THREEBET_PCT',
+    ARG28='WTSD',
+    ARG29='WSD',
+    ARG30='WWSF',
+    ARG31='AF',
+    ARG32='CBET_PCT',
+    ARG33='DONK_PCT',
+    ARG34='CHECKRAISE_PCT',
 )
 
 # Add float constants
@@ -353,8 +375,7 @@ class ASTAgent(BaseAgent):
     def __init__(self, dealer: Any, seat_id: int, ast: Any, **kwargs):
         self.dealer = dealer
         self.ast = ast
-        self.hand_count = 0
-
+        # self.hand_count = 0
 
         self.player_id = seat_id
         self.opponent_id = 1 - self.player_id
@@ -370,6 +391,71 @@ class ASTAgent(BaseAgent):
         # Who was the last aggressor in the preflop action?
         self.preflop_aggressor = None
 
+        # --- NEW: Opponent Stats Storage ---
+        # This dictionary holds the raw counts for all opponent stats.
+        self.opponent_stats = {
+            'num_hands': 0.0,
+            
+            # VPIP (Voluntarily Put In Pot)
+            'vpip_hands': 0,       # Numerator
+            # 'num_hands' is denominator
+            
+            # PFR (Preflop Raise)
+            'pfr_hands': 0,        # Numerator
+            # 'num_hands' is denominator
+            
+            # 3BET
+            '3bet_hands': 0,       # Numerator
+            '3bet_opportunities': 0, # Denominator (Faced a 2-bet)
+            
+            # WTSD (Went To Showdown)
+            'wtsd_hands': 0,       # Numerator
+            # 'num_hands' is denominator
+            
+            # W$SD (Won at Showdown)
+            'wtsd_win_hands': 0,   # Numerator
+            # 'wtsd_hands' is denominator
+            
+            # WWSF (Won When Saw Flop)
+            'wwsf_hands': 0,       # Numerator
+            'saw_flop_hands': 0,     # Denominator
+            
+            # AF (Aggression Factor)
+            'agg_bets': 0,
+            'agg_raises': 0,
+            'agg_calls': 0,
+            # AF = (bets + raises) / calls
+            
+            # CBET% (Continuation Bet)
+            'cbet_hands': 0,
+            'cbet_opportunities': 0, # Was PFA & saw flop
+            
+            # DONK%
+            'donk_hands': 0,
+            'donk_opportunities': 0, # Was OOP, not PFA, & saw flop
+            
+            # CHECKRAISE%
+            'checkraise_hands': 0,
+            'checkraise_opportunities': 0 # Had a chance to check
+        }
+        
+        # --- Per-hand parsed data ---
+        # This is reset on each hand by parse_betting_history
+        self.preflop_flags = {}
+        self.action_counts_by_street = {}
+
+    def get_street_from_cards(self, num_community_cards):
+        """Helper to get the current street name."""
+        if num_community_cards == 0:
+            return 'PREFLOP'
+        elif num_community_cards == 3:
+            return 'FLOP'
+        elif num_community_cards == 4:
+            return 'TURN'
+        elif num_community_cards == 5:
+            return 'RIVER'
+        return 'UNKNOWN'
+
     def get_previous_street(self, street):
             """Helper to get the previous street name."""
             street_order = ['PREFLOP', 'FLOP', 'TURN', 'RIVER']
@@ -379,6 +465,15 @@ class ASTAgent(BaseAgent):
             except ValueError:
                 return None
             
+    def get_street_history(self, history, street):
+        """Helper to get the slice of history for a specific street."""
+        bounds = self.street_boundaries.get(street, {})
+        start = bounds.get('start')
+        if start is None:
+            return []
+        end = bounds.get('end', len(history))
+        return history[start:end]
+
     def update_street_boundaries(self, street, history_len):
         """
         Called on every action to log the start/end of betting rounds
@@ -397,60 +492,63 @@ class ASTAgent(BaseAgent):
     def _parse_street_line(self, street, street_history):
         """
         The core logic. Parses a slice of history for one street
-        and returns the betting lines for both players.
+        and returns the betting lines, aggressor, and action counts.
         """
+        # TODO: check player positional assumptions
         player_actions = {0: [], 1: []}
+        action_counts = {0: Counter(), 1: Counter()}
         player_investment = {0: 0, 1: 0}
         current_bet_level = 0
         last_aggressor = None
         
-        # Preflop is special: it has blinds.
+        # --- Preflop Only State ---
+        num_raises = 0
+        preflop_flags = {
+            'p0_faced_2bet': False, 'p1_faced_2bet': False,
+            'p0_3bet': False, 'p1_3bet': False,
+        }
+
         if street == 'PREFLOP':
             player_investment = {0: 1, 1: 2} # SB=1, BB=2
             current_bet_level = 2
-            last_aggressor = 1 # The Big Blind is the initial "aggressor"
+            last_aggressor = 1 # BB is initial aggressor
         
-        # Who is first to act on this street?
-        # Postflop, SB (pos 0) is always first.
-        # Preflop, SB (pos 0) is also first.
         first_to_act = 0
-        
-        # Check for a donk-bet opportunity
-        # A donk-bet is when an out-of-position player
-        # (who was NOT the preflop aggressor) bets first.
         is_donk_bet_opportunity = (
             street != 'PREFLOP' and
             self.preflop_aggressor is not None and
             first_to_act != self.preflop_aggressor
         )
-        
         actions_this_street = 0
 
         for (pos, bet, fold) in street_history:
             amount_to_call = current_bet_level - player_investment[pos]
-            action_str = "None"
+            action_str = "NONE"
 
             if fold:
                 action_str = "FOLD"
             elif bet > current_bet_level:
                 # This is a Bet or a Raise
                 if amount_to_call == 0:
-                    # No bet to call, so this is a "BET"
+                    action_str = "BET"
                     if (is_donk_bet_opportunity and 
                         pos == first_to_act and 
                         actions_this_street == 0):
                         action_str = "DONK_BET"
-                    else:
-                        action_str = "BET"
                 else:
-                    # There was a bet to call, so this is a "RAISE"
                     action_str = "RAISE"
+                    if street == 'PREFLOP':
+                        num_raises += 1
+                        if num_raises == 1: # This is a 2-bet
+                            pass # First raise
+                        elif num_raises == 2: # This is a 3-bet
+                            preflop_flags[f'p{pos}_3bet'] = True
+                            preflop_flags[f'p{1-pos}_faced_2bet'] = True
                 
                 current_bet_level = bet
                 last_aggressor = pos
             
             elif bet == current_bet_level:
-                # This is a Check or a Call
                 if amount_to_call == 0:
                     action_str = "CHECK"
                 else:
@@ -458,46 +556,182 @@ class ASTAgent(BaseAgent):
             
             player_investment[pos] = bet
             player_actions[pos].append(action_str)
+            action_counts[pos][action_str] += 1
             actions_this_street += 1
         
-        # Combine the action lists into a single string line
         lines = {
             0: '-'.join(player_actions[0]),
             1: '-'.join(player_actions[1])
         }
         
-        return lines, last_aggressor
+        return lines, last_aggressor, preflop_flags, action_counts
+
 
     def parse_betting_history(self, history):
         """
         Orchestrates the parsing of the entire history by street.
+        This is called *during* the hand by act() and *after* the hand
+        by hand_complete().
         """
-        # Reset state
+        # Reset per-hand state
         self.lines_by_street = {0: {}, 1: {}}
         self.preflop_aggressor = None
+        self.preflop_flags = {}
+        self.action_counts_by_street = {}
         
-        # Slice the flat history list into a dict of lists by street
         street_slices = {}
         for street, bounds in self.street_boundaries.items():
             start = bounds['start']
-            # .get('end', len(history)) ensures we parse the current, in-progress street
             end = bounds.get('end', len(history)) 
             street_slices[street] = history[start:end]
 
-        # Parse Preflop first to find the aggressor
         if 'PREFLOP' in street_slices:
-            lines, aggressor = self._parse_street_line('PREFLOP', street_slices['PREFLOP'])
+            lines, agg, flags, counts = self._parse_street_line('PREFLOP', street_slices['PREFLOP'])
             self.lines_by_street[0]['PREFLOP'] = lines[0]
             self.lines_by_street[1]['PREFLOP'] = lines[1]
-            self.preflop_aggressor = aggressor # Store for postflop parsing
+            self.preflop_aggressor = agg
+            self.preflop_flags = flags
+            self.action_counts_by_street['PREFLOP'] = counts
 
-        # Parse Postflop streets
         for street in ['FLOP', 'TURN', 'RIVER']:
             if street in street_slices:
-                lines, _ = self._parse_street_line(street, street_slices[street])
+                lines, agg, _, counts = self._parse_street_line(street, street_slices[street])
                 self.lines_by_street[0][street] = lines[0]
                 self.lines_by_street[1][street] = lines[1]
+                if agg is not None: # Track aggressor postflop
+                    self.preflop_aggressor = agg
+                self.action_counts_by_street[street] = counts
     
+    def hand_complete(self, final_history, reward, final_observation):
+        """
+        !! NEW METHOD !!
+        Call this at the END of each hand to update opponent stats.
+        
+        Args:
+            final_history (list): The complete dealer.history for the hand.
+            reward (float): The reward received by *this* player.
+            final_observation (dict): The final observation for the hand.
+        """
+        # 1. Parse the final, complete history
+        # This sets self.lines_by_street, self.preflop_flags, etc.
+        self.parse_betting_history(final_history)
+        
+        # 2. Get opponent info and stats dict
+        opp_id = self.opponent_id
+        stats = self.opponent_stats # This is a reference, so we modify it directly
+        
+        stats['num_hands'] += 1
+        
+        # 3. Get key hand facts for the OPPONENT
+        opponent_won_hand = reward < 0
+        opp_line_preflop = self.lines_by_street[opp_id].get('PREFLOP', '')
+        opp_line_flop = self.lines_by_street[opp_id].get('FLOP', '')
+        
+        opponent_folded_preflop = 'FOLD' in opp_line_preflop
+        opponent_saw_flop = not opponent_folded_preflop
+        
+        final_street = self.get_street_from_cards(len(final_observation.get('community_cards', [])))
+        last_action_was_fold = final_history and final_history[-1][2]
+
+        # 4. Update stats
+        
+        # --- WTSD / W$SD ---
+        if final_street == 'RIVER' and not last_action_was_fold:
+            stats['wtsd_hands'] += 1
+            if opponent_won_hand:
+                stats['wtsd_win_hands'] += 1
+        
+        # --- WWSF ---
+        if opponent_saw_flop:
+            stats['saw_flop_hands'] += 1
+            if opponent_won_hand:
+                stats['wwsf_hands'] += 1
+        
+        # --- VPIP ---
+        # VPIP = Voluntarily put in money preflop.
+        # For SB: Any CALL or RAISE.
+        # For BB: Any CALL or RAISE (CHECK is not voluntary).
+        opp_vpip = False
+        if 'FOLD' in opp_line_preflop: pass
+        elif opp_line_preflop == 'CHECK': pass # BB checked
+        elif opp_line_preflop == 'CHECK-FOLD': pass
+        else:
+            opp_vpip = True # Any other line (CALL, RAISE, CALL-RAISE, etc.)
+            
+        if opp_vpip:
+            stats['vpip_hands'] += 1
+            
+        # --- PFR ---
+        if 'RAISE' in opp_line_preflop:
+            stats['pfr_hands'] += 1
+            
+        # --- 3BET ---
+        if self.preflop_flags.get(f'p{opp_id}_faced_2bet', False):
+            stats['3bet_opportunities'] += 1
+        if self.preflop_flags.get(f'p{opp_id}_3bet', False):
+            stats['3bet_hands'] += 1
+            
+        # --- AF, CBET, DONK, CHECKRAISE (Postflop) ---
+        opp_was_pfa = self.preflop_aggressor == opp_id
+        
+        for street in ['FLOP', 'TURN', 'RIVER']:
+            opp_actions = self.action_counts_by_street.get(street, {}).get(opp_id, Counter())
+            if not opp_actions: # Hand ended before this street
+                break
+                
+            # AF (Aggression Factor)
+            stats['agg_bets'] += opp_actions['BET'] + opp_actions['DONK_BET']
+            stats['agg_raises'] += opp_actions['RAISE']
+            stats['agg_calls'] += opp_actions['CALL']
+            
+            # Check-Raise
+            if opp_actions['CHECK'] > 0:
+                stats['checkraise_opportunities'] += 1
+                if opp_actions['RAISE'] > 0:
+                    stats['checkraise_hands'] += 1
+            
+            # CBET / DONK (Flop only)
+            if street == 'FLOP' and opponent_saw_flop:
+                if opp_was_pfa:
+                    stats['cbet_opportunities'] += 1
+                    if opp_actions['BET'] > 0 or opp_actions['DONK_BET'] > 0:
+                        stats['cbet_hands'] += 1
+                else:
+                    opp_is_oop = opp_id == 0 # SB is OOP postflop
+                    if opp_is_oop:
+                        stats['donk_opportunities'] += 1
+                        if opp_actions['DONK_BET'] > 0:
+                            stats['donk_hands'] += 1
+            
+            if opp_actions['FOLD'] > 0:
+                break # Opponent folded, stop processing further streets
+                
+        # 5. Reset street boundaries for the next hand
+        self.street_boundaries = {}
+
+    def get_opponent_stats(self):
+        """
+        !! NEW METHOD !!
+        Calculates percentages from raw counts to be fed to the agent.
+        """
+        s = self.opponent_stats
+        
+        def safe_div(num, den):
+            return (num / den) if den > 0 else 0.0
+            
+        return {
+            'num_hands': s['num_hands'],
+            'VPIP': safe_div(s['vpip_hands'], s['num_hands']),
+            'PFR': safe_div(s['pfr_hands'], s['num_hands']),
+            '3BET': safe_div(s['3bet_hands'], s['3bet_opportunities']),
+            'WTSD': safe_div(s['wtsd_hands'], s['num_hands']),
+            'W$SD': safe_div(s['wtsd_win_hands'], s.get('wtsd_hands', 0)), # Use .get for safety
+            'WWSF': safe_div(s['wwsf_hands'], s['saw_flop_hands']),
+            'AF': safe_div(s['agg_bets'] + s['agg_raises'], s['agg_calls']),
+            'CBET%': safe_div(s['cbet_hands'], s['cbet_opportunities']),
+            'DONK%': safe_div(s['donk_hands'], s['donk_opportunities']),
+            'CHECKRAISE%': safe_div(s['checkraise_hands'], s['checkraise_opportunities']),
+        }
 
     # Value agent bets according to their hand strength
     def act(self, obs: clubs.poker.engine.ObservationDict) -> int:
@@ -559,9 +793,9 @@ class ASTAgent(BaseAgent):
 
         # betting line
         history = self.dealer.history
-        if len(history) <= 1:
+        # if len(history) <= 1:
             # we're preflop in a new hand
-            self.hand_count += 1
+            # self.hand_count += 1
         self.update_street_boundaries(street, len(history))
         
         # 2. Re-parse the entire history on every action
@@ -575,7 +809,8 @@ class ASTAgent(BaseAgent):
         river_opponent_line = self.lines_by_street[self.opponent_id].get("RIVER", "NONE")
         
         # opponent's statistics
-
+        # These stats are as-of the *end of the last hand*.
+        historical_stats = self.get_opponent_stats()
 
 
         # execute AST logic
@@ -607,6 +842,19 @@ class ASTAgent(BaseAgent):
             flop_opponent_line,
             turn_opponent_line,
             river_opponent_line,
+
+            historical_stats['num_hands'],
+            historical_stats['VPIP'],
+            historical_stats['PFR'],
+            historical_stats['3BET'],
+            historical_stats['WTSD'],
+            historical_stats['W$SD'],
+            historical_stats['WWSF'],
+            historical_stats['AF'],
+            historical_stats['CBET%'],
+            historical_stats['DONK%'],
+            historical_stats['CHECKRAISE%'],
+
         )
         bet = action * pot_size
 
@@ -694,9 +942,11 @@ toolbox.decorate("mutate", gp.staticLimit(key=operator.attrgetter("height"), max
 def main():
     random.seed(42)
     
-    POP_SIZE = 100
-    N_GEN = 100
-    CXPB, MUTPB = 0.7, 0.2
+    POP_SIZE = 200      # TIP: divisible by 4
+    N_GEN = 500
+    MAX_HANDS = 250
+    EVAL_WITH_LEGACY_INDIVIDUALS = False
+    SAVE_EVERY_X_GEN = 100
     
     pop = toolbox.population(n=POP_SIZE)
     fossil_record = {}
@@ -726,7 +976,7 @@ def main():
                 agent1_logic = toolbox.compile(expr=pop[i])
                 agent2_logic = toolbox.compile(expr=pop[j])
 
-                winnings1, winnings2, num_hands = toolbox.evaluate(agent1_logic, agent2_logic, max_hands=100)
+                winnings1, winnings2, num_hands = toolbox.evaluate(agent1_logic, agent2_logic, max_hands=MAX_HANDS)
                 
                 winnings_map[i] += winnings1
                 winnings_map[j] += winnings2
@@ -735,17 +985,18 @@ def main():
 
         # Each individual plays against our bench of simple and legacy agents
         bench = [RandomAgent, RandomAgent2, StationAgent, ManiacAgent, SimpleValueAgent]
-        bench += [gen['individual'] for gen in fossil_record.values()]
+        if EVAL_WITH_LEGACY_INDIVIDUALS:
+            bench += [gen['individual'] for gen in fossil_record.values()]
         bench_size = len(bench)
 
         for i in range(len(pop)):
             for opponent in bench:
                 # ready opponent
                 if inspect.isclass(opponent):
-                    winnings, opp_winnings, num_hands = toolbox.evaluate(agent1_logic, opponent, max_hands=100)
+                    winnings, opp_winnings, num_hands = toolbox.evaluate(agent1_logic, opponent, max_hands=MAX_HANDS)
                 else:
                     opponent_logic = toolbox.compile(expr=opponent)
-                    winnings, opp_winnings, num_hands = toolbox.evaluate(agent1_logic, opponent_logic, max_hands=100)
+                    winnings, opp_winnings, num_hands = toolbox.evaluate(agent1_logic, opponent_logic, max_hands=MAX_HANDS)
 
                 winnings_map[i] += winnings
                 num_hands_map[i] += num_hands
@@ -807,21 +1058,29 @@ def main():
             del mutant.fitness.values
 
         # Introduce new organisms
-        offspring3 = [gp.genHalfAndHalf(pset, min_=0, max_=INITAL_MAX_TREE_HEIGHT*2)]*len(survivors)
+        offspring3 = [toolbox.individual() for _ in range(len(survivors))]
 
         # The new population is the survivors and their offspring
         pop[:] = survivors + offspring1 + offspring2 + offspring3
+
+        # Save
+        if gen % SAVE_EVERY_X_GEN == 0:
+            # Save fossil record
+            cur_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            save_id = f"fossils_v0.2_gen{gen}_{cur_time}"
+            save_path = f"{os.path.dirname(__file__)}\\fossils\\{save_id}.pkl" # Windows file path format
+            with open(save_path, 'wb') as f:
+                pickle.dump(fossil_record, f)
 
     print("--- Evolution Finished ---")
 
     # --- Save, Print, and Plot Results ---
     # Save fossil record
     cur_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    save_id = f"fossils_v0.1_{cur_time}"
+    save_id = f"fossils_v0.2_gen{gen_nums}_{cur_time}"
     save_path = f"{os.path.dirname(__file__)}\\fossils\\{save_id}.pkl" # Windows file path format
     with open(save_path, 'wb') as f:
         pickle.dump(fossil_record, f)
-
 
     print("\n--- Fossil Record (Best of Each Generation) ---")
     for gen, data in fossil_record.items():
