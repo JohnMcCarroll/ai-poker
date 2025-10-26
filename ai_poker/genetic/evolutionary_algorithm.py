@@ -169,7 +169,7 @@ pset.renameArguments(
 )
 
 # Add float constants
-FLOAT_CONSTANTS = [0.0, 0.1, 0.25, 0.333, 0.5, 0.667, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0]
+FLOAT_CONSTANTS = [-1.0, 0.0, 0.1, 0.25, 0.333, 0.5, 0.667, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0]
 for val in FLOAT_CONSTANTS:
     pset.addTerminal(val, float)
 
@@ -483,13 +483,17 @@ class ASTAgent(BaseAgent):
         """
         if street not in self.street_boundaries:
             # This is the first action of a new street
-            self.street_boundaries[street] = {'start': history_len}
+            if street == 'PREFLOP':
+                self.street_boundaries[street] = {'start': 0}
+            else:
+                self.street_boundaries[street] = {'start': history_len} if self.player_id != self.button else {'start': history_len - 1}
             
             # Find the previous street and set its 'end'
             prev_street = self.get_previous_street(street)
             if prev_street and prev_street in self.street_boundaries:
                 if 'end' not in self.street_boundaries[prev_street]:
-                    self.street_boundaries[prev_street]['end'] = history_len
+                    # player who acts second on each street will have one extra bet to record
+                    self.street_boundaries[prev_street]['end'] = history_len if self.player_id != self.button else history_len - 1
 
     def _parse_street_line(self, street, street_history):
         """
@@ -703,7 +707,7 @@ class ASTAgent(BaseAgent):
                     if opp_actions['BET'] > 0 or opp_actions['DONK_BET'] > 0:
                         stats['cbet_hands'] += 1
                 else:
-                    opp_is_oop = opp_id == 0 # SB is OOP postflop
+                    opp_is_oop = opp_id != self.button # BB is OOP postflop
                     if opp_is_oop:
                         stats['donk_opportunities'] += 1
                         if opp_actions['DONK_BET'] > 0:
@@ -962,7 +966,7 @@ def main():
     
     POP_SIZE = 200      # TIP: divisible by 4
     N_GEN = 500
-    MAX_HANDS = 250
+    MAX_HANDS = 200
     EVAL_WITH_LEGACY_INDIVIDUALS = False
     SAVE_EVERY_X_GEN = 100
     VERSION_NUM = 0.2

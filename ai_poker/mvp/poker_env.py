@@ -1,6 +1,7 @@
 from typing import List, Union, Literal, Optional, Tuple
-from clubs.poker.engine import Dealer
+from clubs.poker.engine import Dealer, ObservationDict
 from clubs_gym.envs import ClubsEnv
+from clubs import error, poker, render
 
 
 class PokerDealer(Dealer):
@@ -15,7 +16,7 @@ class PokerDealer(Dealer):
         else:
             # TODO: add nuance to this - we want min raise to be big_blind on each street, but reraises should consider last bet size
             # min_raise = max(self.big_blind, self.largest_raise + call)
-            min_raise = self.big_blind
+            min_raise = self.big_blind + call
             if raise_size == "pot":
                 max_raise = self.pot + call * 2
             elif raise_size == float("inf"):
@@ -34,6 +35,117 @@ class PokerDealer(Dealer):
         min_raise = min(min_raise, self.stacks[self.action])
         max_raise = min(max_raise, self.stacks[self.action])
         return call, min_raise, max_raise
+    
+    def step(self, bet: float) -> Tuple[ObservationDict, List[int], List[bool]]:
+        """Advances poker game to next player. If the bet is 0, it is
+        either considered a check or fold, depending on the previous
+        action. The given bet is always rounded to the closest valid bet
+        size. When it is the same distance from two valid bet sizes
+        the smaller bet size is used, e.g. if the min raise is 10 and
+        the bet is 5, it is rounded down to 0.
+
+        Parameters
+        ----------
+        bet : int
+            number of chips bet by player currently active
+
+        Returns
+        -------
+        Tuple[ObservationDict, List[int], List[bool]]
+            observation dictionary, payouts for every player, boolean value for every
+            player showing if that player is still active in the round
+
+        Examples
+        --------
+
+        >>> dealer = Dealer(**configs.LEDUC_TWO_PLAYER)
+        >>> obs = dealer.reset()
+        >>> dealer.step(0)
+        ... ({'action': 0,
+        ...  'active': [True, True],
+        ...  'button': 1,
+        ...  'call': 0,
+        ...  'community_cards': [],
+        ...  'hole_cards': [[Card (139879188163600): A♥], [Card (139879188163504): A♠]],
+        ...  'max_raise': 2,
+        ...  'min_raise': 2,
+        ...  'pot': 2,
+        ...  'stacks': [9, 9],
+        ...  'street_commits': [0, 0]},
+        ...  [0, 0],
+        ...  [False, False])
+        """
+        if self.action == -1:
+            if any(self.active):
+                done = self._done()
+                payouts = self._payouts()
+                observation = self._observation(all(done))
+                return observation, payouts, done
+            raise error.TableResetError("call reset() before calling first step()")
+
+        fold = bet < 0
+        bet = round(bet)
+
+        call, min_raise, max_raise = self._bet_sizes()
+        # round bet to nearest sizing
+        bet = self._clean_bet(bet, call, min_raise, max_raise)
+
+        # only fold if player cannot check
+        if call and ((bet < call) or fold):
+            self.active[self.action] = False
+            bet = 0
+            fold = True     # Added: UPDATE FOLD BOOL!
+
+        # if bet is full raise record as largest raise
+        if bet and (bet - call) >= self.largest_raise:
+            self.largest_raise = bet - call
+            self.street_raises += 1
+
+        self._collect_bet(bet)
+
+        self.history.append((self.action, int(bet), bool(fold)))
+
+        self.street_option[self.action] = True
+        self._move_action()
+
+        # if all agreed go to next street
+        if self._all_agreed():
+            self.action = self.button
+            self._move_action()
+            # if at most 1 player active and not all in turn up all
+            # community cards and evaluate hand
+            while True:
+                self.street += 1
+                full_streets = self.street >= self.num_streets
+                all_in = [
+                    bool(active * (stack == 0))
+                    for active, stack in zip(self.active, self.stacks)
+                ]
+                all_all_in = sum(self.active) - sum(all_in) <= 1
+                if full_streets:
+                    break
+                self.community_cards += self.deck.draw(
+                    self.num_community_cards[self.street]
+                )
+                if not all_all_in:
+                    break
+            self.street_commits = [0] * self.num_players
+            self.street_option = [not active for active in self.active]
+            self.street_raises = 0
+
+        done = self._done()
+        payouts = self._payouts()
+        if all(done):
+            self.action = -1
+            self.pot = 0
+            self.stacks = [
+                stack + payout + pot_commit
+                for stack, payout, pot_commit in zip(
+                    self.stacks, payouts, self.pot_commits
+                )
+            ]
+        observation = self._observation(all(done))
+        return observation, payouts, done
 
 
 class PokerEnv(ClubsEnv):
