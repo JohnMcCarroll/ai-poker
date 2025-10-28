@@ -188,9 +188,24 @@ pset.addTerminal(True, bool)
 pset.addTerminal(False, bool)
 
 # betting line strings
-LINES = ['FOLD', "DONK_BET", "BET", "RAISE", "CHECK", "CALL", "NONE"]
+LINES = ['FOLD', "DONK_BET", "BET", "RAISE", "CHECK", "CALL", "NONE", "THREE_BET", "FOUR_BET"]
 for line in LINES:
     pset.addTerminal(line, str)
+# Add all joined combinations of 2 and three actions
+# some might be nonsense, #TODO: prune nonsense lines
+# some weird deep raise lines might not be captured
+TWO_ACTION_LINES = list(combinations(LINES, 2))
+for line in TWO_ACTION_LINES:
+    if 'FOLD' == line[0] or 'CALL' == line[0] or 'NONE' in line:
+        continue
+    pset.addTerminal('-'.join(line), str)
+
+THREE_ACTION_LINES = list(combinations(LINES, 3))
+for line in THREE_ACTION_LINES:
+    if 'FOLD' == line[0] or 'FOLD' == line[1] or 'CALL' == line[0] or 'CALL' == line[1] or 'NONE' in line:
+        continue
+    pset.addTerminal('-'.join(line), str)
+
 
 # --- 2. DEAP Toolbox Setup ---
 
@@ -520,6 +535,7 @@ class ASTAgent(BaseAgent):
             player_investment[1 - self.button] = 2
             current_bet_level = 2
             last_aggressor = 1 - self.button # BB is initial aggressor
+            num_raises += 1
         
         first_to_act_post_flop = 1 - self.button
         is_donk_bet_opportunity = (
@@ -545,24 +561,27 @@ class ASTAgent(BaseAgent):
                         action_str = "DONK_BET"
                 else:
                     action_str = "RAISE"
-                    if street == 'PREFLOP':
-                        num_raises += 1
-                        if num_raises == 1: # This is a 2-bet
-                            pass # First raise
-                        elif num_raises == 2: # This is a 3-bet
-                            preflop_flags[f'p{pos}_3bet'] = True
-                            preflop_flags[f'p{1-pos}_faced_2bet'] = True
-                
-                current_bet_level = bet
+                    # if street == 'PREFLOP':
+                    num_raises += 1
+                    if num_raises == 2: # This is a 2-bet
+                        pass
+                    elif num_raises == 3: # This is a 3-bet
+                        action_str = "THREE_BET"
+                        preflop_flags[f'p{pos}_3bet'] = True
+                        preflop_flags[f'p{1-pos}_faced_2bet'] = True
+                    elif num_raises == 4: # This is a 3-bet
+                        action_str = "FOUR_BET"
+
+                current_bet_level = bet + player_investment[pos]
                 last_aggressor = pos
             
-            elif bet == current_bet_level:
+            elif bet + player_investment[pos] == current_bet_level:
                 if amount_to_call == 0:
                     action_str = "CHECK"
                 else:
                     action_str = "CALL"
             
-            player_investment[pos] = bet
+            player_investment[pos] = bet + player_investment[pos]
             player_actions[pos].append(action_str)
             action_counts[pos][action_str] += 1
             actions_this_street += 1
@@ -969,7 +988,7 @@ def main():
     MAX_HANDS = 200
     EVAL_WITH_LEGACY_INDIVIDUALS = False
     SAVE_EVERY_X_GEN = 100
-    VERSION_NUM = 0.2
+    VERSION_NUM = 0.3
 
     pop = toolbox.population(n=POP_SIZE)
     fossil_record = {}
