@@ -188,24 +188,28 @@ pset.addTerminal(True, bool)
 pset.addTerminal(False, bool)
 
 # betting line strings
-LINES = ['FOLD', "DONK_BET", "BET", "RAISE", "CHECK", "CALL", "NONE", "THREE_BET", "FOUR_BET"]
+    # This seems a bit much, let's simplify
+# LINES = ['FOLD', "DONK_BET", "BET", "RAISE", "CHECK", "CALL", "NONE", "THREE_BET", "FOUR_BET"]
+# for line in LINES:
+#     pset.addTerminal(line, str)
+# # Add all joined combinations of 2 and three actions
+# # some might be nonsense, #TODO: prune nonsense lines
+# # some weird deep raise lines might not be captured
+# TWO_ACTION_LINES = list(combinations(LINES, 2))
+# for line in TWO_ACTION_LINES:
+#     if 'FOLD' == line[0] or 'CALL' == line[0] or 'NONE' in line:
+#         continue
+#     pset.addTerminal('-'.join(line), str)
+
+# THREE_ACTION_LINES = list(combinations(LINES, 3))
+# for line in THREE_ACTION_LINES:
+#     if 'FOLD' == line[0] or 'FOLD' == line[1] or 'CALL' == line[0] or 'CALL' == line[1] or 'NONE' in line:
+#         continue
+#     pset.addTerminal('-'.join(line), str)
+LINES = ["DONK_BET", "BET", "RAISE", "CHECK", "CALL", "THREE_BET", "FOUR_BET", 
+         "DONK_BET-CALL", "BET-CALL", "CHECK-RAISE", "RAISE-CALL", "CALL-CALL"]
 for line in LINES:
     pset.addTerminal(line, str)
-# Add all joined combinations of 2 and three actions
-# some might be nonsense, #TODO: prune nonsense lines
-# some weird deep raise lines might not be captured
-TWO_ACTION_LINES = list(combinations(LINES, 2))
-for line in TWO_ACTION_LINES:
-    if 'FOLD' == line[0] or 'CALL' == line[0] or 'NONE' in line:
-        continue
-    pset.addTerminal('-'.join(line), str)
-
-THREE_ACTION_LINES = list(combinations(LINES, 3))
-for line in THREE_ACTION_LINES:
-    if 'FOLD' == line[0] or 'FOLD' == line[1] or 'CALL' == line[0] or 'CALL' == line[1] or 'NONE' in line:
-        continue
-    pset.addTerminal('-'.join(line), str)
-
 
 # --- 2. DEAP Toolbox Setup ---
 
@@ -219,7 +223,7 @@ toolbox = base.Toolbox()
 # Attribute generator:
 # We use genHalfAndHalf to create a mix of full trees and growing trees,
 # which promotes diversity in the initial population.
-toolbox.register("expr", gp.genHalfAndHalf, pset=pset, min_=1, max_=INITAL_MAX_TREE_HEIGHT)
+toolbox.register("expr", gp.genFull, pset=pset, min_=1, max_=INITAL_MAX_TREE_HEIGHT)
 
 # Structure initializers:
 toolbox.register("individual", tools.initIterate, creator.Individual, toolbox.expr)
@@ -539,15 +543,16 @@ class ASTAgent(BaseAgent):
         
         first_to_act_post_flop = 1 - self.button
         is_donk_bet_opportunity = (
-            street != 'PREFLOP' and
-            self.preflop_aggressor is not None and
-            first_to_act_post_flop != self.preflop_aggressor
+            street != 'PREFLOP' 
+            # and
+            # self.preflop_aggressor is not None and
+            # first_to_act_post_flop != self.preflop_aggressor
         )
         actions_this_street = 0
 
         for (pos, bet, fold) in street_history:
             amount_to_call = current_bet_level - player_investment[pos]
-            action_str = "NONE"
+            action_str = ""
 
             if fold:
                 action_str = "FOLD"
@@ -555,6 +560,7 @@ class ASTAgent(BaseAgent):
                 # This is a Bet or a Raise
                 if amount_to_call == 0:
                     action_str = "BET"
+                    num_raises += 1
                     if (is_donk_bet_opportunity and 
                         pos == first_to_act_post_flop and 
                         actions_this_street == 0):
@@ -567,9 +573,10 @@ class ASTAgent(BaseAgent):
                         pass
                     elif num_raises == 3: # This is a 3-bet
                         action_str = "THREE_BET"
-                        preflop_flags[f'p{pos}_3bet'] = True
-                        preflop_flags[f'p{1-pos}_faced_2bet'] = True
-                    elif num_raises == 4: # This is a 3-bet
+                        if street == 'PREFLOP':
+                            preflop_flags[f'p{pos}_3bet'] = True
+                            preflop_flags[f'p{1-pos}_faced_2bet'] = True
+                    elif num_raises == 4: # This is a 4-bet
                         action_str = "FOUR_BET"
 
                 current_bet_level = bet + player_investment[pos]
@@ -583,6 +590,8 @@ class ASTAgent(BaseAgent):
             
             player_investment[pos] = bet + player_investment[pos]
             player_actions[pos].append(action_str)
+            if action_str == "THREE_BET" or action_str == "FOUR_BET":
+                player_actions[pos] = [action_str]
             action_counts[pos][action_str] += 1
             actions_this_street += 1
         
@@ -653,9 +662,10 @@ class ASTAgent(BaseAgent):
         # 3. Get key hand facts for the OPPONENT
         opponent_won_hand = reward[self.player_id] < 0
         opp_line_preflop = self.lines_by_street[opp_id].get('PREFLOP', '')
+        player_line_preflop = self.lines_by_street[self.player_id].get('PREFLOP', '')
         opp_line_flop = self.lines_by_street[opp_id].get('FLOP', '')
         
-        opponent_folded_preflop = 'FOLD' in opp_line_preflop or '' == opp_line_preflop
+        opponent_folded_preflop = 'FOLD' in opp_line_preflop or '' == opp_line_preflop or 'FOLD' in player_line_preflop or '' == player_line_preflop
         opponent_saw_flop = not opponent_folded_preflop
         
         final_street = self.get_street_from_cards(len(self.final_observation.get('community_cards', [])))
@@ -680,12 +690,16 @@ class ASTAgent(BaseAgent):
         # For SB: Any CALL or RAISE.
         # For BB: Any CALL or RAISE (CHECK is not voluntary).
         opp_vpip = False
-        if 'FOLD' in opp_line_preflop: pass
-        elif '' == opp_line_preflop: pass
-        elif opp_line_preflop == 'CHECK': pass # BB checked
-        elif opp_line_preflop == 'CHECK-FOLD': pass
-        else:
-            opp_vpip = True # Any other line (CALL, RAISE, CALL-RAISE, etc.)
+        if 'BET' in opp_line_preflop or 'RAISE' in opp_line_preflop \
+            or 'CALL' in opp_line_preflop or 'THREE_BET' in opp_line_preflop \
+                or 'FOUR_BET' in opp_line_preflop:
+            opp_vpip = True
+        # if 'FOLD' in opp_line_preflop: pass
+        # elif '' == opp_line_preflop: pass
+        # elif opp_line_preflop == 'CHECK': pass # BB checked
+        # elif opp_line_preflop == 'CHECK-FOLD': pass
+        # else:
+        #     opp_vpip = True # Any other line (CALL, RAISE, CALL-RAISE, etc.)
             
         if opp_vpip:
             stats['vpip_hands'] += 1
