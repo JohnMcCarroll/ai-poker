@@ -37,9 +37,11 @@ def run_evaluation(task):
         if inspect.isclass(agent_tree_or_class):
             # It's a benchmark agent like RandomAgent
             return agent_tree_or_class
-        elif isinstance(agent_tree_or_class, gp.PrimitiveTree):
+        # elif isinstance(agent_tree_or_class, gp.PrimitiveTree):
+        elif isinstance(agent_tree_or_class, list):
             # It's a DEAP individual (from pop or fossil_record)
-            return toolbox.compile(expr=agent_tree_or_class)
+            deap_ind = creator.Individual(agent_tree_or_class)
+            return toolbox.compile(expr=deap_ind)
         else:
             # Fallback for unexpected types
             print(f"Warning: Unknown agent type in eval: {type(agent_tree_or_class)}")
@@ -1110,6 +1112,17 @@ def main():
 
     print("--- Starting Evolution ---")
     for gen in range(N_GEN):
+        # # PROFILING MP CODE
+        # import cProfile
+        # import pstats
+        # import io
+
+        # profiler = cProfile.Profile()
+
+        # # Enable profiling for a specific section
+        # profiler.enable()
+
+
         print(f"\n--- Generation {gen}/{N_GEN} ---")
         
         # --- 1. Prepare all evaluation tasks ---
@@ -1119,7 +1132,7 @@ def main():
         for i in range(len(pop)):
             for j in range(i + 1, len(pop)):
                 # We send the raw trees (pop[i]) and indices (i, j)
-                tasks.append((pop[i], pop[j], MAX_HANDS, i, j))
+                tasks.append((list(pop[i]), list(pop[j]), MAX_HANDS, i, j))
                 
         # --- Task Group 2: Benchmark (Pop vs. Bench) ---
         bench = [RandomAgent, RandomAgent2, StationAgent, ManiacAgent, SimpleValueAgent]
@@ -1139,23 +1152,48 @@ def main():
         # --- 2. Run all tasks in parallel ---
         # pool.map distributes the 'tasks' list to the 'run_evaluation' function.
         # It waits until all tasks are complete.
-        results = pool.map(run_evaluation, tasks)
+        import time
+        import sys
+        start_time = time.time()
+        results_iterator = pool.imap_unordered(run_evaluation, tasks)
         
-        # --- 3. Process results ---
-        print("Processing results...")
+        # # --- 3. Process results ---
+        # print("Processing results...")
         winnings_map = {i: 0 for i in range(len(pop))}
         num_hands_map = {i: 0 for i in range(len(pop))}
         
-        for res in results:
+        # for res in results:
+        #     i, j, w1, w2, n_hands = res
+            
+        #     winnings_map[i] += w1
+        #     num_hands_map[i] += n_hands
+            
+        #     if j is not None:
+        #         # This was a pop vs. pop match, so update agent j
+        #         winnings_map[j] += w2
+        #         num_hands_map[j] += n_hands
+        # --- 3. Process results from the iterator ---
+        for task_count, res in enumerate(results_iterator):
+            # This loop receives results as soon as a worker finishes one task
             i, j, w1, w2, n_hands = res
             
+            # Update scores for individual i
             winnings_map[i] += w1
             num_hands_map[i] += n_hands
             
+            # Update scores for individual j (if it was a pop vs. pop match)
             if j is not None:
-                # This was a pop vs. pop match, so update agent j
                 winnings_map[j] += w2
                 num_hands_map[j] += n_hands
+            
+            # Progress update
+            if (task_count + 1) % 500 == 0:
+                elapsed = time.time() - start_time
+                rate = (task_count + 1) / elapsed
+                sys.stdout.write(f"\r  -> Completed {task_count + 1}/{len(tasks)} tasks | Rate: {rate:.2f} tasks/sec")
+                sys.stdout.flush()
+
+        print(f"\nAll {len(tasks)} tasks processed in {time.time() - start_time:.2f} seconds.")
                 
         # --- 4. Assign fitness (your code, slightly modified) ---
         print("Assigning fitness...")
@@ -1171,6 +1209,18 @@ def main():
         record = mstats.compile(pop)
         logbook.record(gen=gen, nevals=len(pop)-1 + bench_size, **record)
         print(logbook.stream)
+
+        
+        # # END PROFILE
+        # profiler.disable()
+        # s = io.StringIO()
+        # sortby = pstats.SortKey.CUMULATIVE
+        # ps = pstats.Stats(profiler, stream=s).sort_stats(sortby)
+        # ps.print_stats()
+        # print("\n--- Profiling Results ---")
+        # print(s.getvalue())
+        # # profile_file = f"profile_{5}"
+        # # with open(profile_file, 'w'):
 
         # --- Save the best of the generation ---
         best_ind = tools.selBest(pop, 1)[0]
@@ -1271,7 +1321,7 @@ def main():
 if __name__ == "__main__":
     # Create the pool once, globally.
     # This will use all available CPU cores.
-    NUM_PROCS = 5
+    NUM_PROCS = multiprocessing.cpu_count()
     pool = multiprocessing.Pool(processes=NUM_PROCS)
     
     # Make the pool and toolbox globally accessible to the wrapper function
