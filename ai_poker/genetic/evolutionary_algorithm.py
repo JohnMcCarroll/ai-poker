@@ -21,7 +21,7 @@ import copy
 
 # --- 1. Define Primitives and Terminals ---
 
-INITIAL_MAX_TREE_HEIGHT = 25
+INITIAL_MAX_TREE_HEIGHT = 15
 INITIAL_MIN_TREE_HEIGHT = 5
 MAX_TREE_HEIGHT = 90
 VISUALIZE = False
