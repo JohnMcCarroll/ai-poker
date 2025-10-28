@@ -63,7 +63,7 @@ def run_evaluation(task):
 
 # --- 1. Define Primitives and Terminals ---
 
-INITIAL_MAX_TREE_HEIGHT = 25
+INITIAL_MAX_TREE_HEIGHT = 15
 INITIAL_MIN_TREE_HEIGHT = 5
 MAX_TREE_HEIGHT = 90
 VISUALIZE = False
@@ -1040,7 +1040,7 @@ toolbox.decorate("mutate", gp.staticLimit(key=operator.attrgetter("height"), max
 def main():
     random.seed(42)
     
-    POP_SIZE = 200      # TIP: divisible by 4
+    POP_SIZE = 100      # TIP: divisible by 4
     N_GEN = 500
     MAX_HANDS = 200
     EVAL_WITH_LEGACY_INDIVIDUALS = False
@@ -1134,7 +1134,7 @@ def main():
                 tasks.append((pop[i], opponent, MAX_HANDS, i, None))
                 
         
-        print(f"Evaluating {len(tasks)} matches across {pool.ncpus} cores...")
+        print(f"Evaluating {len(tasks)} matches across {multiprocessing.cpu_count()} cores...")
         
         # --- 2. Run all tasks in parallel ---
         # pool.map distributes the 'tasks' list to the 'run_evaluation' function.
@@ -1271,7 +1271,8 @@ def main():
 if __name__ == "__main__":
     # Create the pool once, globally.
     # This will use all available CPU cores.
-    pool = multiprocessing.Pool()
+    NUM_PROCS = 5
+    pool = multiprocessing.Pool(processes=NUM_PROCS)
     
     # Make the pool and toolbox globally accessible to the wrapper function
     # Note: This often happens by default, but it's good to be explicit
