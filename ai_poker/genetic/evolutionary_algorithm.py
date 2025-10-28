@@ -21,7 +21,8 @@ import copy
 
 # --- 1. Define Primitives and Terminals ---
 
-INITAL_MAX_TREE_HEIGHT = 5
+INITIAL_MAX_TREE_HEIGHT = 25
+INITIAL_MIN_TREE_HEIGHT = 5
 MAX_TREE_HEIGHT = 90
 VISUALIZE = False
 RANK_ORDER = {
@@ -223,7 +224,7 @@ toolbox = base.Toolbox()
 # Attribute generator:
 # We use genHalfAndHalf to create a mix of full trees and growing trees,
 # which promotes diversity in the initial population.
-toolbox.register("expr", gp.genFull, pset=pset, min_=1, max_=INITAL_MAX_TREE_HEIGHT)
+toolbox.register("expr", gp.genFull, pset=pset, min_=INITIAL_MIN_TREE_HEIGHT, max_=INITIAL_MAX_TREE_HEIGHT)
 
 # Structure initializers:
 toolbox.register("individual", tools.initIterate, creator.Individual, toolbox.expr)
@@ -519,7 +520,7 @@ class ASTAgent(BaseAgent):
         The core logic. Parses a slice of history for one street
         and returns the betting lines, aggressor, and action counts.
         """
-        # TODO: check player positional assumptions
+
         player_actions = {0: [], 1: []}
         action_counts = {0: Counter(), 1: Counter()}
         player_investment = {0: 0, 1: 0}
@@ -705,7 +706,7 @@ class ASTAgent(BaseAgent):
             stats['vpip_hands'] += 1
             
         # --- PFR ---
-        if 'RAISE' in opp_line_preflop:
+        if 'RAISE' in opp_line_preflop or 'THREE_BET' in opp_line_preflop or 'FOUR_BET' in opp_line_preflop:
             stats['pfr_hands'] += 1
             
         # --- 3BET ---
@@ -724,7 +725,7 @@ class ASTAgent(BaseAgent):
                 
             # AF (Aggression Factor)
             stats['agg_bets'] += opp_actions['BET'] + opp_actions['DONK_BET']
-            stats['agg_raises'] += opp_actions['RAISE']
+            stats['agg_raises'] += opp_actions['RAISE'] + opp_actions['THREE_BET'] + opp_actions['FOUR_BET']
             stats['agg_calls'] += opp_actions['CALL']
             
             # Check-Raise
