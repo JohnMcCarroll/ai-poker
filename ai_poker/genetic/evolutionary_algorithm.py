@@ -17,7 +17,49 @@ import inspect
 from collections import Counter, namedtuple
 from itertools import combinations
 import copy
+# ... (near your other imports)
+import multiprocessing
+import inspect
+from deap import gp
 
+# --- This is your new parallel evaluation function ---
+# It MUST be at the top level of the script to be pickled.
+def run_evaluation(task):
+    """
+    Wrapper function to run a single evaluation match in a worker process.
+    """
+    # 1. Unpack the task
+    # (j will be None for a bench match)
+    agent1_tree, agent2_tree, max_hands, i, j = task
+
+    def compile_agent(agent_tree_or_class):
+        """Helper to compile a DEAP tree or return a class."""
+        if inspect.isclass(agent_tree_or_class):
+            # It's a benchmark agent like RandomAgent
+            return agent_tree_or_class
+        elif isinstance(agent_tree_or_class, gp.PrimitiveTree):
+            # It's a DEAP individual (from pop or fossil_record)
+            return toolbox.compile(expr=agent_tree_or_class)
+        else:
+            # Fallback for unexpected types
+            print(f"Warning: Unknown agent type in eval: {type(agent_tree_or_class)}")
+            return agent_tree_or_class
+
+    try:
+        # 2. Compile logic *inside the worker*
+        agent1_logic = compile_agent(agent1_tree)
+        agent2_logic = compile_agent(agent2_tree)
+        
+        # 3. Run the evaluation
+        w1, w2, n_hands = toolbox.evaluate(agent1_logic, agent2_logic, max_hands=max_hands)
+        
+        # 4. Return results with indices to map back
+        return (i, j, w1, w2, n_hands)
+        
+    except Exception as e:
+        # Catch errors from bad individuals
+        print(f"Error evaluating task ({i} vs {j}): {e}")
+        return (i, j, 0, 0, 1) # Return 0 winnings, 1 hand (to avoid divide-by-zero)
 
 # --- 1. Define Primitives and Terminals ---
 
@@ -1020,50 +1062,110 @@ def main():
     logbook = tools.Logbook()
     logbook.header = ['gen', 'nevals'] + mstats.fields
 
-    print("--- Starting Evolution ---")
+    # print("--- Starting Evolution ---")
 
+    # for gen in range(N_GEN):
+    #     # --- Evaluate the entire population ---
+    #     # Each individual plays against every other individual (round-robin)
+    #     winnings_map = {i: 0 for i in range(len(pop))}
+    #     num_hands_map = {i: 0 for i in range(len(pop))}
+        
+    #     for i in range(len(pop)):
+    #         for j in range(i + 1, len(pop)):
+    #             agent1_logic = toolbox.compile(expr=pop[i])
+    #             agent2_logic = toolbox.compile(expr=pop[j])
+
+    #             winnings1, winnings2, num_hands = toolbox.evaluate(agent1_logic, agent2_logic, max_hands=MAX_HANDS)
+                
+    #             winnings_map[i] += winnings1
+    #             winnings_map[j] += winnings2
+    #             num_hands_map[i] += num_hands
+    #             num_hands_map[j] += num_hands
+
+    #     # Each individual plays against our bench of simple and legacy agents
+    #     bench = [RandomAgent, RandomAgent2, StationAgent, ManiacAgent, SimpleValueAgent]
+    #     if EVAL_WITH_LEGACY_INDIVIDUALS:
+    #         bench += [gen['individual'] for gen in fossil_record.values()]
+    #     bench_size = len(bench)
+
+    #     for i in range(len(pop)):
+    #         for opponent in bench:
+    #             # ready opponent
+    #             if inspect.isclass(opponent):
+    #                 winnings, opp_winnings, num_hands = toolbox.evaluate(agent1_logic, opponent, max_hands=MAX_HANDS)
+    #             else:
+    #                 opponent_logic = toolbox.compile(expr=opponent)
+    #                 winnings, opp_winnings, num_hands = toolbox.evaluate(agent1_logic, opponent_logic, max_hands=MAX_HANDS)
+
+    #             winnings_map[i] += winnings
+    #             num_hands_map[i] += num_hands
+
+    #     # Assign fitness based on total winnings
+    #     for i, ind in enumerate(pop):
+    #         # # Assign total winnings as fitness
+    #         # ind.fitness.values = (winnings_map[i],)
+    #         # Assign win rate as fitness
+    #         ind.fitness.values = (winnings_map[i] / num_hands_map[i] ,)
+    # --- Inside your main() function ---
+
+    print("--- Starting Evolution ---")
     for gen in range(N_GEN):
-        # --- Evaluate the entire population ---
-        # Each individual plays against every other individual (round-robin)
+        print(f"\n--- Generation {gen}/{N_GEN} ---")
+        
+        # --- 1. Prepare all evaluation tasks ---
+        tasks = []
+        
+        # --- Task Group 1: Round-Robin (Pop vs. Pop) ---
+        for i in range(len(pop)):
+            for j in range(i + 1, len(pop)):
+                # We send the raw trees (pop[i]) and indices (i, j)
+                tasks.append((pop[i], pop[j], MAX_HANDS, i, j))
+                
+        # --- Task Group 2: Benchmark (Pop vs. Bench) ---
+        bench = [RandomAgent, RandomAgent2, StationAgent, ManiacAgent, SimpleValueAgent]
+        if EVAL_WITH_LEGACY_INDIVIDUALS:
+            bench += [gen_data['individual'] for gen_data in fossil_record.values()]
+        bench_size = len(bench)
+        
+        for i in range(len(pop)):
+            for opponent in bench:
+                # We send the raw tree (pop[i]) and the opponent (class or tree)
+                # We use 'None' as the 'j' index to mark it as a bench match
+                tasks.append((pop[i], opponent, MAX_HANDS, i, None))
+                
+        
+        print(f"Evaluating {len(tasks)} matches across {pool.ncpus} cores...")
+        
+        # --- 2. Run all tasks in parallel ---
+        # pool.map distributes the 'tasks' list to the 'run_evaluation' function.
+        # It waits until all tasks are complete.
+        results = pool.map(run_evaluation, tasks)
+        
+        # --- 3. Process results ---
+        print("Processing results...")
         winnings_map = {i: 0 for i in range(len(pop))}
         num_hands_map = {i: 0 for i in range(len(pop))}
         
-        for i in range(len(pop)):
-            for j in range(i + 1, len(pop)):
-                agent1_logic = toolbox.compile(expr=pop[i])
-                agent2_logic = toolbox.compile(expr=pop[j])
-
-                winnings1, winnings2, num_hands = toolbox.evaluate(agent1_logic, agent2_logic, max_hands=MAX_HANDS)
+        for res in results:
+            i, j, w1, w2, n_hands = res
+            
+            winnings_map[i] += w1
+            num_hands_map[i] += n_hands
+            
+            if j is not None:
+                # This was a pop vs. pop match, so update agent j
+                winnings_map[j] += w2
+                num_hands_map[j] += n_hands
                 
-                winnings_map[i] += winnings1
-                winnings_map[j] += winnings2
-                num_hands_map[i] += num_hands
-                num_hands_map[j] += num_hands
-
-        # Each individual plays against our bench of simple and legacy agents
-        bench = [RandomAgent, RandomAgent2, StationAgent, ManiacAgent, SimpleValueAgent]
-        if EVAL_WITH_LEGACY_INDIVIDUALS:
-            bench += [gen['individual'] for gen in fossil_record.values()]
-        bench_size = len(bench)
-
-        for i in range(len(pop)):
-            for opponent in bench:
-                # ready opponent
-                if inspect.isclass(opponent):
-                    winnings, opp_winnings, num_hands = toolbox.evaluate(agent1_logic, opponent, max_hands=MAX_HANDS)
-                else:
-                    opponent_logic = toolbox.compile(expr=opponent)
-                    winnings, opp_winnings, num_hands = toolbox.evaluate(agent1_logic, opponent_logic, max_hands=MAX_HANDS)
-
-                winnings_map[i] += winnings
-                num_hands_map[i] += num_hands
-
-        # Assign fitness based on total winnings
+        # --- 4. Assign fitness (your code, slightly modified) ---
+        print("Assigning fitness...")
         for i, ind in enumerate(pop):
-            # # Assign total winnings as fitness
-            # ind.fitness.values = (winnings_map[i],)
-            # Assign win rate as fitness
-            ind.fitness.values = (winnings_map[i] / num_hands_map[i] ,)
+            if num_hands_map[i] > 0:
+                ind.fitness.values = (winnings_map[i] / num_hands_map[i],)
+            else:
+                ind.fitness.values = (0,) # Avoid division by zero
+                
+        # ... (rest of your generation loop: selection, crossover, etc.) ...
 
         # --- Log statistics ---
         record = mstats.compile(pop)
@@ -1167,4 +1269,23 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # Create the pool once, globally.
+    # This will use all available CPU cores.
+    pool = multiprocessing.Pool()
+    
+    # Make the pool and toolbox globally accessible to the wrapper function
+    # Note: This often happens by default, but it's good to be explicit
+    # if you run into issues.
+    globals()['pool'] = pool
+    globals()['toolbox'] = toolbox # Ensure toolbox is global
+
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("Evolution stopped by user.")
+    finally:
+        # Clean up the worker processes
+        pool.close()
+        pool.join()
+        print("--- Evolution Complete ---")
+    # main()
