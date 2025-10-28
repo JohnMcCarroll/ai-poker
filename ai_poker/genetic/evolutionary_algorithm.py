@@ -985,7 +985,7 @@ def evaluate_agents(agent1_logic, agent2_logic, max_hands=500):
 toolbox.register("evaluate", evaluate_agents)
 toolbox.register("select", tools.selBest) # Select the best X individuals
 toolbox.register("mate", gp.cxOnePoint)
-toolbox.register("expr_mut", gp.genFull, min_=0, max_=INITAL_MAX_TREE_HEIGHT)
+toolbox.register("expr_mut", gp.genFull, min_=INITIAL_MIN_TREE_HEIGHT, max_=INITIAL_MAX_TREE_HEIGHT)
 toolbox.register("mutate", gp.mutUniform, expr=toolbox.expr_mut, pset=pset)
 
 # Decorate crossover and mutation to prevent code bloat
