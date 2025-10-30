@@ -65,8 +65,8 @@ def run_evaluation(task):
 
 # --- 1. Define Primitives and Terminals ---
 
-INITIAL_MAX_TREE_HEIGHT = 15
-INITIAL_MIN_TREE_HEIGHT = 5
+INITIAL_MAX_TREE_HEIGHT = 10
+INITIAL_MIN_TREE_HEIGHT = 3
 MAX_TREE_HEIGHT = 90
 VISUALIZE = False
 RANK_ORDER = {
@@ -1042,12 +1042,13 @@ toolbox.decorate("mutate", gp.staticLimit(key=operator.attrgetter("height"), max
 def main():
     random.seed(42)
     
-    POP_SIZE = 100      # TIP: divisible by 4
-    N_GEN = 500
-    MAX_HANDS = 200
-    EVAL_WITH_LEGACY_INDIVIDUALS = False
-    SAVE_EVERY_X_GEN = 100
-    VERSION_NUM = 0.3
+    POP_SIZE = 50      # TIP: divisible by 4
+    N_GEN = 1000
+    MAX_HANDS = 500
+    EVAL_WITH_LEGACY_INDIVIDUALS = True
+    EVALUATION_BENCH_SIZE = 50
+    SAVE_EVERY_X_GEN = 50
+    VERSION_NUM = 0.4
 
     pop = toolbox.population(n=POP_SIZE)
     fossil_record = {}
@@ -1129,32 +1130,47 @@ def main():
         tasks = []
         
         # --- Task Group 1: Round-Robin (Pop vs. Pop) ---
-        for i in range(len(pop)):
-            for j in range(i + 1, len(pop)):
-                # We send the raw trees (pop[i]) and indices (i, j)
-                tasks.append((list(pop[i]), list(pop[j]), MAX_HANDS, i, j))
-                
+        # for i in range(len(pop)):
+        #     for j in range(i + 1, len(pop)):
+        #         # We send the raw trees (pop[i]) and indices (i, j)
+        #         tasks.append((list(pop[i]), list(pop[j]), MAX_HANDS, i, j))
+
+        # Create bench
         # --- Task Group 2: Benchmark (Pop vs. Bench) ---
-        bench = [RandomAgent, RandomAgent2, StationAgent, ManiacAgent, SimpleValueAgent]
-        if EVAL_WITH_LEGACY_INDIVIDUALS:
-            bench += [gen_data['individual'] for gen_data in fossil_record.values()]
+        static_bench = [RandomAgent, RandomAgent2, StationAgent, ManiacAgent, SimpleValueAgent]
+        num_static_bots = len(static_bench)
+
+        fossil_opponents = EVALUATION_BENCH_SIZE - num_static_bots
+
+        fossil_bench_dicts = list(fossil_record.values())[-fossil_opponents:]
+        fossil_bench = [fossil['individual'] for fossil in fossil_bench_dicts]
+        bench = static_bench + fossil_bench
+        multiplier = EVALUATION_BENCH_SIZE // len(bench)
+        if multiplier > 1:
+            full_bench = bench*multiplier
+        else:
+            full_bench = bench
+
+        # if EVAL_WITH_LEGACY_INDIVIDUALS:
+        # bench += [gen_data['individual'] for gen_data in fossil_record.values()]
         bench_size = len(bench)
+        full_bench_size = len(full_bench)
         
         for i in range(len(pop)):
-            for opponent in bench:
+            for j, opponent in enumerate(full_bench):
                 # We send the raw tree (pop[i]) and the opponent (class or tree)
                 # We use 'None' as the 'j' index to mark it as a bench match
-                tasks.append((pop[i], opponent, MAX_HANDS, i, None))
+                tasks.append((pop[i], opponent, MAX_HANDS, i, j))
                 
         
-        print(f"Evaluating {len(tasks)} matches across {multiprocessing.cpu_count()} cores...")
+        # print(f"Evaluating {len(tasks)} matches across {multiprocessing.cpu_count()} cores...")
         
         # --- 2. Run all tasks in parallel ---
         # pool.map distributes the 'tasks' list to the 'run_evaluation' function.
         # It waits until all tasks are complete.
-        import time
-        import sys
-        start_time = time.time()
+        # import time
+        # import sys
+        # start_time = time.time()
         results_iterator = pool.imap_unordered(run_evaluation, tasks)
         
         # # --- 3. Process results ---
@@ -1162,6 +1178,8 @@ def main():
         winnings_map = {i: 0 for i in range(len(pop))}
         num_hands_map = {i: 0 for i in range(len(pop))}
         
+        bench_winnings_map = {i: 0 for i in range(len(full_bench))}
+        bench_num_hands_map = {i: 0 for i in range(len(full_bench))}
         # for res in results:
         #     i, j, w1, w2, n_hands = res
             
@@ -1181,19 +1199,21 @@ def main():
             winnings_map[i] += w1
             num_hands_map[i] += n_hands
             
-            # Update scores for individual j (if it was a pop vs. pop match)
+            # Update scores for bench players
             if j is not None:
-                winnings_map[j] += w2
-                num_hands_map[j] += n_hands
+                # if multiplier > 1:
+                #     index = j % multiplier
+                bench_winnings_map[j] += w2
+                bench_num_hands_map[j] += n_hands
             
-            # Progress update
-            if (task_count + 1) % 500 == 0:
-                elapsed = time.time() - start_time
-                rate = (task_count + 1) / elapsed
-                sys.stdout.write(f"\r  -> Completed {task_count + 1}/{len(tasks)} tasks | Rate: {rate:.2f} tasks/sec")
-                sys.stdout.flush()
+            # # Progress update
+            # if (task_count + 1) % 500 == 0:
+            #     elapsed = time.time() - start_time
+            #     rate = (task_count + 1) / elapsed
+                # sys.stdout.write(f"\r  -> Completed {task_count + 1}/{len(tasks)} tasks | Rate: {rate:.2f} tasks/sec")
+                # sys.stdout.flush()
 
-        print(f"\nAll {len(tasks)} tasks processed in {time.time() - start_time:.2f} seconds.")
+        # print(f"\nAll {len(tasks)} tasks processed in {time.time() - start_time:.2f} seconds.")
                 
         # --- 4. Assign fitness (your code, slightly modified) ---
         print("Assigning fitness...")
@@ -1202,7 +1222,37 @@ def main():
                 ind.fitness.values = (winnings_map[i] / num_hands_map[i],)
             else:
                 ind.fitness.values = (0,) # Avoid division by zero
-                
+                print("individual player had no matches")
+
+        # calc bench win rate
+        bench_win_rate_map = {i: {'win_rate': 0.0, 'opponent': None} for i in range(len(full_bench))}
+        highest_win_rate = {'win_rate': 0.0, 'opponent_name': None}
+        for i, ind in enumerate(full_bench):
+            if bench_num_hands_map[i] > 0:
+                win_rate = bench_winnings_map[i] / bench_num_hands_map[i]
+                bench_win_rate_map[i]['win_rate'] = win_rate
+                bench_win_rate_map[i]['opponent'] = ind
+                if win_rate > highest_win_rate['win_rate']:
+                    highest_win_rate['win_rate'] = win_rate
+                    if isinstance(ind, list):
+                        base_bench_idx = i % bench_size
+                        if gen + 1 <= fossil_opponents:
+                            # <= 45 fossils, just subtract the static bots
+                            fossil_gen = base_bench_idx - num_static_bots
+                        else:
+                            num_lost_gens = gen + 1 <= fossil_opponents
+                            fossil_gen = base_bench_idx - num_static_bots + num_lost_gens
+                        opp_name = f'Fossil Record Gen {fossil_gen}'
+                    else:
+                        opp_name = str(ind)
+                    highest_win_rate['opponent_name'] = opp_name
+
+            else:
+                # ind.fitness.values = (0,) # Avoid division by zero
+                print("bench player had no matches")
+        
+        print(f'Highest winning bench player: win rate: {highest_win_rate["win_rate"]}, bench player: {highest_win_rate["opponent_name"]}')
+
         # ... (rest of your generation loop: selection, crossover, etc.) ...
 
         # --- Log statistics ---
@@ -1226,7 +1276,8 @@ def main():
         best_ind = tools.selBest(pop, 1)[0]
         fossil_record[gen] = {
             'fitness': best_ind.fitness.values[0],
-            'individual': best_ind
+            'individual': best_ind,
+            'gen': gen
         }
 
         # --- Visualize generation's best individual ---
