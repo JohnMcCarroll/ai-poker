@@ -1041,7 +1041,7 @@ toolbox.decorate("mutate", gp.staticLimit(key=operator.attrgetter("height"), max
 
 def main():
     random.seed(42)
-        
+
     POP_SIZE = 200      # TIP: divisible by 4
     N_GEN = 1000
     MAX_HANDS = 500
@@ -1239,7 +1239,7 @@ def main():
                             # <= 45 fossils, just subtract the static bots
                             fossil_gen = base_bench_idx - num_static_bots
                         else:
-                            num_lost_gens = gen + 1 <= fossil_opponents
+                            num_lost_gens = gen + 1 - fossil_opponents
                             fossil_gen = base_bench_idx - num_static_bots + num_lost_gens
                         opp_name = f'Fossil Record Gen {fossil_gen}'
                     else:
