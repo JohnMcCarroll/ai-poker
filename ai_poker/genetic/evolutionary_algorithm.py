@@ -1041,11 +1041,10 @@ toolbox.decorate("mutate", gp.staticLimit(key=operator.attrgetter("height"), max
 
 def main():
     random.seed(42)
-    
-    POP_SIZE = 50      # TIP: divisible by 4
+        
+    POP_SIZE = 200      # TIP: divisible by 4
     N_GEN = 1000
     MAX_HANDS = 500
-    EVAL_WITH_LEGACY_INDIVIDUALS = True
     EVALUATION_BENCH_SIZE = 50
     SAVE_EVERY_X_GEN = 50
     VERSION_NUM = 0.4
