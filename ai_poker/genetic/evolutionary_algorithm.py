@@ -22,6 +22,7 @@ import multiprocessing
 import inspect
 from deap import gp
 
+
 # --- This is your new parallel evaluation function ---
 # It MUST be at the top level of the script to be pickled.
 def run_evaluation(task):
@@ -67,7 +68,8 @@ def run_evaluation(task):
 
 INITIAL_MAX_TREE_HEIGHT = 10
 INITIAL_MIN_TREE_HEIGHT = 3
-MAX_TREE_HEIGHT = 90
+MAX_TREE_HEIGHT = 50
+MAX_NODE_COUNT = 50000
 VISUALIZE = False
 RANK_ORDER = {
     None: 0., '2': 2., '3': 3., '4': 4., '5': 5., '6': 6., '7': 7., '8': 8., '9': 9., 'T': 10., 'J': 11., 'Q': 12., 'K': 13., 'A': 14.
@@ -259,7 +261,7 @@ for line in LINES:
 # --- 2. DEAP Toolbox Setup ---
 
 # Define the fitness criteria: maximize winnings
-creator.create("FitnessMax", base.Fitness, weights=(1.0,))
+creator.create("FitnessMax", base.Fitness, weights=(1.0,-0.001))
 # Define the individual: a program tree with the defined fitness
 creator.create("Individual", gp.PrimitiveTree, fitness=creator.FitnessMax)
 
@@ -1036,6 +1038,32 @@ toolbox.register("mutate", gp.mutUniform, expr=toolbox.expr_mut, pset=pset)
 toolbox.decorate("mate", gp.staticLimit(key=operator.attrgetter("height"), max_value=MAX_TREE_HEIGHT))       # can we increase limit?
 toolbox.decorate("mutate", gp.staticLimit(key=operator.attrgetter("height"), max_value=MAX_TREE_HEIGHT))
 
+# --- INITIALIZE STATISTICS ---
+def get_win_rate(individual):
+    """Returns the first fitness value (the win rate)."""
+    if individual.fitness.valid:
+        return individual.fitness.values[0]
+    return 0 # Return a very low value if invalid
+
+def get_size(individual):
+    """Returns the first fitness value (the win rate)."""
+    if individual.fitness.valid:
+        return individual.fitness.values[1]
+    return 0 # Return a very low value if invalid
+
+stats = tools.Statistics(key=get_win_rate) # Use the helper function here!
+stats.register("win_rate_avg", np.mean)
+stats.register("win_rate_std", np.std)
+stats.register("win_rate_min", np.min)
+stats.register("win_rate_max", np.max)
+
+stats2 = tools.Statistics(key=get_size) # Use the helper function here!
+stats2.register("size_avg", np.mean)
+stats2.register("size_std", np.std)
+stats2.register("size_min", np.min)
+stats2.register("size_max", np.max)
+
+logbook = tools.Logbook()
 
 # --- 4. The Main Evolutionary Loop ---
 
@@ -1047,22 +1075,22 @@ def main():
     MAX_HANDS = 500
     EVALUATION_BENCH_SIZE = 50
     SAVE_EVERY_X_GEN = 50
-    VERSION_NUM = 0.4
+    VERSION_NUM = 0.5
 
     pop = toolbox.population(n=POP_SIZE)
     fossil_record = {}
     
-    # Statistics to track
-    stats_fit = tools.Statistics(lambda ind: ind.fitness.values)
-    stats_size = tools.Statistics(len)
-    mstats = tools.MultiStatistics(fitness=stats_fit, size=stats_size)
-    mstats.register("avg", np.mean)
-    mstats.register("std", np.std)
-    mstats.register("min", np.min)
-    mstats.register("max", np.max)
+    # # Statistics to track
+    # stats_fit = tools.Statistics(lambda ind: ind.fitness.values)
+    # stats_size = tools.Statistics(len)
+    # mstats = tools.MultiStatistics(fitness=stats_fit, size=stats_size)
+    # mstats.register("avg", np.mean)
+    # mstats.register("std", np.std)
+    # mstats.register("min", np.min)
+    # mstats.register("max", np.max)
 
-    logbook = tools.Logbook()
-    logbook.header = ['gen', 'nevals'] + mstats.fields
+    # logbook = tools.Logbook()
+    # logbook.header = ['gen', 'nevals'] + mstats.fields
 
     # print("--- Starting Evolution ---")
 
@@ -1123,7 +1151,7 @@ def main():
         # profiler.enable()
 
 
-        print(f"\n--- Generation {gen}/{N_GEN} ---")
+        # print(f"\n--- Generation {gen}/{N_GEN} ---")
         
         # --- 1. Prepare all evaluation tasks ---
         tasks = []
@@ -1136,24 +1164,29 @@ def main():
 
         # Create bench
         # --- Task Group 2: Benchmark (Pop vs. Bench) ---
-        static_bench = [RandomAgent, RandomAgent2, StationAgent, ManiacAgent, SimpleValueAgent]
+        static_bench = [SimpleValueAgent, StationAgent, ManiacAgent, RandomAgent, RandomAgent2]
         num_static_bots = len(static_bench)
+        multiplier = EVALUATION_BENCH_SIZE // num_static_bots
+        bot_bench = static_bench*multiplier # populate eval bench with static bots
 
-        fossil_opponents = EVALUATION_BENCH_SIZE - num_static_bots
+        # fossil_opponents = EVALUATION_BENCH_SIZE - num_static_bots
 
-        fossil_bench_dicts = list(fossil_record.values())[-fossil_opponents:]
+        fossil_bench_dicts = list(fossil_record.values())[-EVALUATION_BENCH_SIZE:]
         fossil_bench = [fossil['individual'] for fossil in fossil_bench_dicts]
-        bench = static_bench + fossil_bench
-        multiplier = EVALUATION_BENCH_SIZE // len(bench)
-        if multiplier > 1:
-            full_bench = bench*multiplier
-        else:
-            full_bench = bench
+        # bench = static_bench + fossil_bench
+        num_fossils = len(fossil_bench)
+        num_bots_needed = EVALUATION_BENCH_SIZE - num_fossils
+        full_bench = fossil_bench + bot_bench[0:num_bots_needed]
+        
+        # if multiplier > 1:
+        #     full_bench = bench*multiplier
+        # else:
+        #     full_bench = bench
 
         # if EVAL_WITH_LEGACY_INDIVIDUALS:
         # bench += [gen_data['individual'] for gen_data in fossil_record.values()]
-        bench_size = len(bench)
-        full_bench_size = len(full_bench)
+        # bench_size = len(bench)
+        # full_bench_size = len(full_bench)
         
         for i in range(len(pop)):
             for j, opponent in enumerate(full_bench):
@@ -1215,12 +1248,16 @@ def main():
         # print(f"\nAll {len(tasks)} tasks processed in {time.time() - start_time:.2f} seconds.")
                 
         # --- 4. Assign fitness (your code, slightly modified) ---
-        print("Assigning fitness...")
+        # print("Assigning fitness...")
         for i, ind in enumerate(pop):
-            if num_hands_map[i] > 0:
-                ind.fitness.values = (winnings_map[i] / num_hands_map[i],)
+            node_count = len(ind)
+            if node_count > MAX_NODE_COUNT:
+                # remove individuals that are too large
+                ind.fitness.values = (-9999999, node_count)
+            elif num_hands_map[i] > 0:
+                ind.fitness.values = (winnings_map[i] / num_hands_map[i], node_count)
             else:
-                ind.fitness.values = (0,) # Avoid division by zero
+                ind.fitness.values = (0,node_count)
                 print("individual player had no matches")
 
         # calc bench win rate
@@ -1234,18 +1271,10 @@ def main():
                 if win_rate > highest_win_rate['win_rate']:
                     highest_win_rate['win_rate'] = win_rate
                     if isinstance(ind, list):
-                        base_bench_idx = i % bench_size
-                        if gen + 1 <= fossil_opponents:
-                            # <= 45 fossils, just subtract the static bots
-                            fossil_gen = base_bench_idx - num_static_bots
-                        else:
-                            num_lost_gens = gen + 1 - fossil_opponents
-                            fossil_gen = base_bench_idx - num_static_bots + num_lost_gens
-                        opp_name = f'Fossil Record Gen {fossil_gen}'
+                        opp_name = f'Fossil Record Gen {i}'
                     else:
                         opp_name = str(ind)
                     highest_win_rate['opponent_name'] = opp_name
-
             else:
                 # ind.fitness.values = (0,) # Avoid division by zero
                 print("bench player had no matches")
@@ -1255,10 +1284,13 @@ def main():
         # ... (rest of your generation loop: selection, crossover, etc.) ...
 
         # --- Log statistics ---
-        record = mstats.compile(pop)
-        logbook.record(gen=gen, nevals=len(pop)-1 + bench_size, **record)
-        print(logbook.stream)
+        # record = mstats.compile(pop)
+        win_rate_stats = stats.compile(pop)
+        size_stats = stats2.compile(pop)
+        record = {'gen': gen, **win_rate_stats, **size_stats}
 
+        logbook.record(**record)
+        print(logbook.stream)
         
         # # END PROFILE
         # profiler.disable()
