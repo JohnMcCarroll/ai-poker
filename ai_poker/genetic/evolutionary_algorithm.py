@@ -1271,7 +1271,11 @@ def main():
                 if win_rate > highest_win_rate['win_rate']:
                     highest_win_rate['win_rate'] = win_rate
                     if isinstance(ind, list):
-                        opp_name = f'Fossil Record Gen {i}'
+                        if gen >= EVALUATION_BENCH_SIZE:
+                            gen_num = i + gen + 1 - EVALUATION_BENCH_SIZE
+                        else:
+                            gen_num = i
+                        opp_name = f'Fossil Record Gen {gen_num}'
                     else:
                         opp_name = str(ind)
                     highest_win_rate['opponent_name'] = opp_name
