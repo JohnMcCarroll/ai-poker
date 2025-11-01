@@ -1358,6 +1358,13 @@ def main():
         # The new population is the survivors and their offspring
         pop[:] = survivors + offspring1 + offspring2 + offspring3
 
+        # Prune trees that are too large BEFORE evaluation
+        for i, ind in enumerate(pop):
+            if len(ind) > MAX_NODE_COUNT:
+                # replace obsese tree with new individual, continue random search
+                pop[i] = toolbox.individual()
+
+
         # Save
         if gen % SAVE_EVERY_X_GEN == 0:
             # Save fossil record
