@@ -14,23 +14,20 @@ import os
 import pickle
 import datetime
 import inspect
-from collections import Counter, namedtuple
+from collections import Counter
 from itertools import combinations
 import copy
-# ... (near your other imports)
 import multiprocessing
 import inspect
 from deap import gp
+from itertools import zip_longest
 
 
-# --- This is your new parallel evaluation function ---
-# It MUST be at the top level of the script to be pickled.
 def run_evaluation(task):
     """
     Wrapper function to run a single evaluation match in a worker process.
     """
-    # 1. Unpack the task
-    # (j will be None for a bench match)
+    # Unpack the task
     agent1_tree, agent2_tree, max_hands, i, j = task
 
     def compile_agent(agent_tree_or_class):
@@ -38,7 +35,6 @@ def run_evaluation(task):
         if inspect.isclass(agent_tree_or_class):
             # It's a benchmark agent like RandomAgent
             return agent_tree_or_class
-        # elif isinstance(agent_tree_or_class, gp.PrimitiveTree):
         elif isinstance(agent_tree_or_class, list):
             # It's a DEAP individual (from pop or fossil_record)
             deap_ind = creator.Individual(agent_tree_or_class)
@@ -89,9 +85,6 @@ def if_then_else(condition, out1, out2):
     return out1 if condition else out2
 
 # Poker actions are mapped to a float:
-# < 0.33 -> FOLD
-# 0.33 to 0.66 -> CALL
-# > 0.66 -> RAISE (the value can be used to scale the raise amount)
 OUTPUT_TYPE = float
 
 # The arguments for our evolved function. This defines the "senses" of our agent.
@@ -147,7 +140,6 @@ pset = gp.PrimitiveSetTyped("main", ARGUMENT_TYPES, OUTPUT_TYPE)
 # Logical operators
 pset.addPrimitive(operator.and_, [bool, bool], bool)
 pset.addPrimitive(operator.or_, [bool, bool], bool)
-# pset.addPrimitive(operator.xor_, [bool, bool], bool)
 pset.addPrimitive(operator.not_, [bool], bool)
 
 # Comparison operators for floats
@@ -235,24 +227,6 @@ pset.addTerminal(True, bool)
 pset.addTerminal(False, bool)
 
 # betting line strings
-    # This seems a bit much, let's simplify
-# LINES = ['FOLD', "DONK_BET", "BET", "RAISE", "CHECK", "CALL", "NONE", "THREE_BET", "FOUR_BET"]
-# for line in LINES:
-#     pset.addTerminal(line, str)
-# # Add all joined combinations of 2 and three actions
-# # some might be nonsense, #TODO: prune nonsense lines
-# # some weird deep raise lines might not be captured
-# TWO_ACTION_LINES = list(combinations(LINES, 2))
-# for line in TWO_ACTION_LINES:
-#     if 'FOLD' == line[0] or 'CALL' == line[0] or 'NONE' in line:
-#         continue
-#     pset.addTerminal('-'.join(line), str)
-
-# THREE_ACTION_LINES = list(combinations(LINES, 3))
-# for line in THREE_ACTION_LINES:
-#     if 'FOLD' == line[0] or 'FOLD' == line[1] or 'CALL' == line[0] or 'CALL' == line[1] or 'NONE' in line:
-#         continue
-#     pset.addTerminal('-'.join(line), str)
 LINES = ["DONK_BET", "BET", "RAISE", "CHECK", "CALL", "THREE_BET", "FOUR_BET", 
          "DONK_BET-CALL", "BET-CALL", "CHECK-RAISE", "RAISE-CALL", "CALL-CALL"]
 for line in LINES:
@@ -261,7 +235,7 @@ for line in LINES:
 # --- 2. DEAP Toolbox Setup ---
 
 # Define the fitness criteria: maximize winnings
-creator.create("FitnessMax", base.Fitness, weights=(1.0,-0.001))
+creator.create("FitnessMax", base.Fitness, weights=(1.0,-0.00001))
 # Define the individual: a program tree with the defined fitness
 creator.create("Individual", gp.PrimitiveTree, fitness=creator.FitnessMax)
 
@@ -283,11 +257,6 @@ toolbox.register("compile", gp.compile, pset=pset)
 HAND_STRENGTH_MAP = {i: strength for i, strength in enumerate(np.linspace(0, 1, len(HAND_CLASSES)))}
 STREET_MAP = {0: 'PREFLOP', 1: 'FLOP', 2: 'TURN', 3: 'RIVER'}
 
-
-# Define a simple Card namedtuple for clarity and ease of use.
-# Assumes ranks are integers: 2-10, J=11, Q=12, K=13, A=14.
-# Assumes suits are strings: 's' (spades), 'h' (hearts), 'd' (diamonds), 'c' (clubs).
-# Card = namedtuple('Card', ['rank', 'suit'])
 
 def has_flush_draw(hole_cards, community_cards):
     """
@@ -581,7 +550,6 @@ class ASTAgent(BaseAgent):
         }
 
         if street == 'PREFLOP':
-            # player_investment = {0: 1, 1: 2} # SB=1, BB=2
             player_investment[self.button] = 1
             player_investment[1 - self.button] = 2
             current_bet_level = 2
@@ -591,9 +559,6 @@ class ASTAgent(BaseAgent):
         first_to_act_post_flop = 1 - self.button
         is_donk_bet_opportunity = (
             street != 'PREFLOP' 
-            # and
-            # self.preflop_aggressor is not None and
-            # first_to_act_post_flop != self.preflop_aggressor
         )
         actions_this_street = 0
 
@@ -614,7 +579,6 @@ class ASTAgent(BaseAgent):
                         action_str = "DONK_BET"
                 else:
                     action_str = "RAISE"
-                    # if street == 'PREFLOP':
                     num_raises += 1
                     if num_raises == 2: # This is a 2-bet
                         pass
@@ -741,12 +705,6 @@ class ASTAgent(BaseAgent):
             or 'CALL' in opp_line_preflop or 'THREE_BET' in opp_line_preflop \
                 or 'FOUR_BET' in opp_line_preflop:
             opp_vpip = True
-        # if 'FOLD' in opp_line_preflop: pass
-        # elif '' == opp_line_preflop: pass
-        # elif opp_line_preflop == 'CHECK': pass # BB checked
-        # elif opp_line_preflop == 'CHECK-FOLD': pass
-        # else:
-        #     opp_vpip = True # Any other line (CALL, RAISE, CALL-RAISE, etc.)
             
         if opp_vpip:
             stats['vpip_hands'] += 1
@@ -907,7 +865,6 @@ class ASTAgent(BaseAgent):
 
         self.final_observation = copy.deepcopy(obs)
         historical_stats = self.get_opponent_stats()
-
 
         # execute AST logic
         action = self.ast(
@@ -1075,92 +1032,15 @@ def main():
     MAX_HANDS = 500
     EVALUATION_BENCH_SIZE = 50
     SAVE_EVERY_X_GEN = 50
-    VERSION_NUM = 0.5
+    VERSION_NUM = 0.6
 
     pop = toolbox.population(n=POP_SIZE)
     fossil_record = {}
-    
-    # # Statistics to track
-    # stats_fit = tools.Statistics(lambda ind: ind.fitness.values)
-    # stats_size = tools.Statistics(len)
-    # mstats = tools.MultiStatistics(fitness=stats_fit, size=stats_size)
-    # mstats.register("avg", np.mean)
-    # mstats.register("std", np.std)
-    # mstats.register("min", np.min)
-    # mstats.register("max", np.max)
-
-    # logbook = tools.Logbook()
-    # logbook.header = ['gen', 'nevals'] + mstats.fields
-
-    # print("--- Starting Evolution ---")
-
-    # for gen in range(N_GEN):
-    #     # --- Evaluate the entire population ---
-    #     # Each individual plays against every other individual (round-robin)
-    #     winnings_map = {i: 0 for i in range(len(pop))}
-    #     num_hands_map = {i: 0 for i in range(len(pop))}
-        
-    #     for i in range(len(pop)):
-    #         for j in range(i + 1, len(pop)):
-    #             agent1_logic = toolbox.compile(expr=pop[i])
-    #             agent2_logic = toolbox.compile(expr=pop[j])
-
-    #             winnings1, winnings2, num_hands = toolbox.evaluate(agent1_logic, agent2_logic, max_hands=MAX_HANDS)
-                
-    #             winnings_map[i] += winnings1
-    #             winnings_map[j] += winnings2
-    #             num_hands_map[i] += num_hands
-    #             num_hands_map[j] += num_hands
-
-    #     # Each individual plays against our bench of simple and legacy agents
-    #     bench = [RandomAgent, RandomAgent2, StationAgent, ManiacAgent, SimpleValueAgent]
-    #     if EVAL_WITH_LEGACY_INDIVIDUALS:
-    #         bench += [gen['individual'] for gen in fossil_record.values()]
-    #     bench_size = len(bench)
-
-    #     for i in range(len(pop)):
-    #         for opponent in bench:
-    #             # ready opponent
-    #             if inspect.isclass(opponent):
-    #                 winnings, opp_winnings, num_hands = toolbox.evaluate(agent1_logic, opponent, max_hands=MAX_HANDS)
-    #             else:
-    #                 opponent_logic = toolbox.compile(expr=opponent)
-    #                 winnings, opp_winnings, num_hands = toolbox.evaluate(agent1_logic, opponent_logic, max_hands=MAX_HANDS)
-
-    #             winnings_map[i] += winnings
-    #             num_hands_map[i] += num_hands
-
-    #     # Assign fitness based on total winnings
-    #     for i, ind in enumerate(pop):
-    #         # # Assign total winnings as fitness
-    #         # ind.fitness.values = (winnings_map[i],)
-    #         # Assign win rate as fitness
-    #         ind.fitness.values = (winnings_map[i] / num_hands_map[i] ,)
-    # --- Inside your main() function ---
 
     print("--- Starting Evolution ---")
-    for gen in range(N_GEN):
-        # # PROFILING MP CODE
-        # import cProfile
-        # import pstats
-        # import io
-
-        # profiler = cProfile.Profile()
-
-        # # Enable profiling for a specific section
-        # profiler.enable()
-
-
-        # print(f"\n--- Generation {gen}/{N_GEN} ---")
-        
+    for gen in range(N_GEN):        
         # --- 1. Prepare all evaluation tasks ---
         tasks = []
-        
-        # --- Task Group 1: Round-Robin (Pop vs. Pop) ---
-        # for i in range(len(pop)):
-        #     for j in range(i + 1, len(pop)):
-        #         # We send the raw trees (pop[i]) and indices (i, j)
-        #         tasks.append((list(pop[i]), list(pop[j]), MAX_HANDS, i, j))
 
         # Create bench
         # --- Task Group 2: Benchmark (Pop vs. Bench) ---
@@ -1169,59 +1049,28 @@ def main():
         multiplier = EVALUATION_BENCH_SIZE // num_static_bots
         bot_bench = static_bench*multiplier # populate eval bench with static bots
 
-        # fossil_opponents = EVALUATION_BENCH_SIZE - num_static_bots
-
         fossil_bench_dicts = list(fossil_record.values())[-EVALUATION_BENCH_SIZE:]
         fossil_bench = [fossil['individual'] for fossil in fossil_bench_dicts]
-        # bench = static_bench + fossil_bench
         num_fossils = len(fossil_bench)
         num_bots_needed = EVALUATION_BENCH_SIZE - num_fossils
         full_bench = fossil_bench + bot_bench[0:num_bots_needed]
-        
-        # if multiplier > 1:
-        #     full_bench = bench*multiplier
-        # else:
-        #     full_bench = bench
-
-        # if EVAL_WITH_LEGACY_INDIVIDUALS:
-        # bench += [gen_data['individual'] for gen_data in fossil_record.values()]
-        # bench_size = len(bench)
-        # full_bench_size = len(full_bench)
         
         for i in range(len(pop)):
             for j, opponent in enumerate(full_bench):
                 # We send the raw tree (pop[i]) and the opponent (class or tree)
                 # We use 'None' as the 'j' index to mark it as a bench match
                 tasks.append((pop[i], opponent, MAX_HANDS, i, j))
-                
-        
-        # print(f"Evaluating {len(tasks)} matches across {multiprocessing.cpu_count()} cores...")
         
         # --- 2. Run all tasks in parallel ---
-        # pool.map distributes the 'tasks' list to the 'run_evaluation' function.
-        # It waits until all tasks are complete.
-        # import time
-        # import sys
-        # start_time = time.time()
         results_iterator = pool.imap_unordered(run_evaluation, tasks)
         
         # # --- 3. Process results ---
-        # print("Processing results...")
         winnings_map = {i: 0 for i in range(len(pop))}
         num_hands_map = {i: 0 for i in range(len(pop))}
         
         bench_winnings_map = {i: 0 for i in range(len(full_bench))}
         bench_num_hands_map = {i: 0 for i in range(len(full_bench))}
-        # for res in results:
-        #     i, j, w1, w2, n_hands = res
-            
-        #     winnings_map[i] += w1
-        #     num_hands_map[i] += n_hands
-            
-        #     if j is not None:
-        #         # This was a pop vs. pop match, so update agent j
-        #         winnings_map[j] += w2
-        #         num_hands_map[j] += n_hands
+
         # --- 3. Process results from the iterator ---
         for task_count, res in enumerate(results_iterator):
             # This loop receives results as soon as a worker finishes one task
@@ -1233,32 +1082,17 @@ def main():
             
             # Update scores for bench players
             if j is not None:
-                # if multiplier > 1:
-                #     index = j % multiplier
                 bench_winnings_map[j] += w2
                 bench_num_hands_map[j] += n_hands
-            
-            # # Progress update
-            # if (task_count + 1) % 500 == 0:
-            #     elapsed = time.time() - start_time
-            #     rate = (task_count + 1) / elapsed
-                # sys.stdout.write(f"\r  -> Completed {task_count + 1}/{len(tasks)} tasks | Rate: {rate:.2f} tasks/sec")
-                # sys.stdout.flush()
-
-        # print(f"\nAll {len(tasks)} tasks processed in {time.time() - start_time:.2f} seconds.")
                 
         # --- 4. Assign fitness (your code, slightly modified) ---
-        # print("Assigning fitness...")
         for i, ind in enumerate(pop):
             node_count = len(ind)
-            if node_count > MAX_NODE_COUNT:
-                # remove individuals that are too large
-                ind.fitness.values = (-9999999, node_count)
-            elif num_hands_map[i] > 0:
+            if num_hands_map[i] > 0:
                 ind.fitness.values = (winnings_map[i] / num_hands_map[i], node_count)
             else:
                 ind.fitness.values = (0,node_count)
-                print("individual player had no matches")
+                print("WARNING: individual player had no matches")
 
         # calc bench win rate
         bench_win_rate_map = {i: {'win_rate': 0.0, 'opponent': None} for i in range(len(full_bench))}
@@ -1280,32 +1114,19 @@ def main():
                         opp_name = str(ind)
                     highest_win_rate['opponent_name'] = opp_name
             else:
-                # ind.fitness.values = (0,) # Avoid division by zero
-                print("bench player had no matches")
+                print("WARNING: bench player had no matches")
         
         print(f'Highest winning bench player: win rate: {highest_win_rate["win_rate"]}, bench player: {highest_win_rate["opponent_name"]}')
 
         # ... (rest of your generation loop: selection, crossover, etc.) ...
 
         # --- Log statistics ---
-        # record = mstats.compile(pop)
         win_rate_stats = stats.compile(pop)
         size_stats = stats2.compile(pop)
         record = {'gen': gen, **win_rate_stats, **size_stats}
 
         logbook.record(**record)
         print(logbook.stream)
-        
-        # # END PROFILE
-        # profiler.disable()
-        # s = io.StringIO()
-        # sortby = pstats.SortKey.CUMULATIVE
-        # ps = pstats.Stats(profiler, stream=s).sort_stats(sortby)
-        # ps.print_stats()
-        # print("\n--- Profiling Results ---")
-        # print(s.getvalue())
-        # # profile_file = f"profile_{5}"
-        # # with open(profile_file, 'w'):
 
         # --- Save the best of the generation ---
         best_ind = tools.selBest(pop, 1)[0]
@@ -1331,8 +1152,6 @@ def main():
         offspring3 = [toolbox.clone(ind) for ind in survivors]
         
         # Apply crossover
-        from itertools import zip_longest
-
         for child1, child2 in zip_longest(offspring2[::2], offspring2[1::2], fillvalue=None):
             if child1 is None: 
                 toolbox.mutate(child2)
@@ -1341,14 +1160,12 @@ def main():
                 toolbox.mutate(child1)
                 del child1.fitness.values
             else:
-                # if random.random() < CXPB:
                 toolbox.mate(child1, child2)
                 del child1.fitness.values
                 del child2.fitness.values
         
         # Apply mutation
         for mutant in offspring2:
-            # if random.random() < MUTPB:
             toolbox.mutate(mutant)
             del mutant.fitness.values
 
@@ -1363,7 +1180,6 @@ def main():
             if len(ind) > MAX_NODE_COUNT:
                 # replace obsese tree with new individual, continue random search
                 pop[i] = toolbox.individual()
-
 
         # Save
         if gen % SAVE_EVERY_X_GEN == 0:
@@ -1406,7 +1222,6 @@ def main():
     ax1.legend(lns, labs, loc="best")
     
     plt.grid(True)
-    # plt.show()
     fig_save_path = f"{os.path.dirname(__file__)}\\fossils\\{save_id}.png" # Windows file path format
     plt.savefig(fig_save_path)
 
@@ -1432,4 +1247,3 @@ if __name__ == "__main__":
         pool.close()
         pool.join()
         print("--- Evolution Complete ---")
-    # main()
