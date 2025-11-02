@@ -481,7 +481,7 @@ def main():
     # --- Save, Print, and Plot Results ---
     # Save fossil record
     cur_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    save_id = f"fossils_v{VERSION_NUM}_gen{gen_nums}_{cur_time}"
+    save_id = f"fossils_v{VERSION_NUM}_gen{N_GEN}_{cur_time}"
     save_path = f"{os.path.dirname(__file__)}\\fossils\\{save_id}.pkl" # Windows file path format
     with open(save_path, 'wb') as f:
         pickle.dump(fossil_record, f)
