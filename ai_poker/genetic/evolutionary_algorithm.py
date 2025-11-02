@@ -40,6 +40,7 @@ from ai_poker.genetic.constants import (
     EVALUATION_BENCH_SIZE,
     WIN_RATE_FITNESS_WEIGHT,
     NODE_COUNT_FITNESS_WEIGHT,
+    SEED,
     SAVE_EVERY_X_GEN,
     VERSION_NUM
 )
@@ -299,17 +300,17 @@ toolbox.register("expr_mut", gp.genFull, min_=INITIAL_MIN_TREE_HEIGHT, max_=INIT
 toolbox.register("mutate", gp.mutUniform, expr=toolbox.expr_mut, pset=pset)
 
 # Decorate crossover and mutation to prevent code bloat
-toolbox.decorate("mate", gp.staticLimit(key=operator.attrgetter("height"), max_value=MAX_TREE_HEIGHT))       # can we increase limit?
+toolbox.decorate("mate", gp.staticLimit(key=operator.attrgetter("height"), max_value=MAX_TREE_HEIGHT))
 toolbox.decorate("mutate", gp.staticLimit(key=operator.attrgetter("height"), max_value=MAX_TREE_HEIGHT))
 
-# --- INITIALIZE STATISTICS ---
-stats = tools.Statistics(key=get_win_rate) # Use the helper function here!
+# Initialize statistics
+stats = tools.Statistics(key=get_win_rate)
 stats.register("win_rate_avg", np.mean)
 stats.register("win_rate_std", np.std)
 stats.register("win_rate_min", np.min)
 stats.register("win_rate_max", np.max)
 
-stats2 = tools.Statistics(key=get_size) # Use the helper function here!
+stats2 = tools.Statistics(key=get_size)
 stats2.register("size_avg", np.mean)
 stats2.register("size_std", np.std)
 stats2.register("size_min", np.min)
@@ -320,7 +321,7 @@ logbook = tools.Logbook()
 # DEFINE MAIN EVOLUTIONARY LOOP
 
 def main():
-    random.seed(42)
+    random.seed(SEED)
 
     pop = toolbox.population(n=POP_SIZE)
     fossil_record = {}
