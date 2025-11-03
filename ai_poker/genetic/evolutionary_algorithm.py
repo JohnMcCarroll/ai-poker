@@ -156,7 +156,7 @@ def evaluate_agents(agent1_logic, agent2_logic, max_hands=500):
     game_over = False
 
     # Simulate poker game
-    while True and num_hands < max_hands:
+    while num_hands < max_hands:
 
         bet = env.act(obs)
         obs, rewards, done, info = env.step(bet)
@@ -173,8 +173,11 @@ def evaluate_agents(agent1_logic, agent2_logic, max_hands=500):
                 player2.hand_complete(env.dealer.history, rewards)
             
             if game_over:
-                break
-            obs = env.reset()
+                # reset stacks and deal next hand
+                obs = env.reset(reset_stacks=True)
+            else:
+                # deal next hand
+                obs = env.reset()
 
     return winnings[0], winnings[1], num_hands
 
@@ -397,7 +400,7 @@ def main():
                             gen_num = i + gen + 1 - EVALUATION_BENCH_SIZE
                         else:
                             gen_num = i
-                        opp_name = f'Fossil Record Gen {gen_num}'
+                        opp_name = f'Fossil Gen {gen_num}'
                     else:
                         opp_name = str(ind)
                     highest_win_rate['opponent_name'] = opp_name
@@ -405,7 +408,7 @@ def main():
                 print("WARNING: bench player had no matches")
         
         if VERBOSE:
-            print(f'Highest winning bench player: win rate: {highest_win_rate["win_rate"]}, bench player: {highest_win_rate["opponent_name"]}')
+            print(f'Best bench player generation {gen}: win rate: {highest_win_rate["win_rate"]}, bench player: {highest_win_rate["opponent_name"]}')
 
         # --- Log statistics ---
         win_rate_stats = stats.compile(pop)
@@ -425,8 +428,18 @@ def main():
 
         # --- Visualize generation's best individual ---
         if VERBOSE:
-            print(f'Best Individual of Generation {gen}:')
-            print(str(best_ind))
+            best_ind_index = pop.index(best_ind)
+            if gen == 0:
+                lineage = "New"
+            elif best_ind_index <= POP_SIZE // 4:
+                lineage = "Survivor"
+            elif best_ind_index <= POP_SIZE * 2 // 4:
+                lineage = "Crossover"
+            elif best_ind_index <= POP_SIZE * 3 // 4:
+                lineage = "Mutation"
+            else:
+                lineage = "New"
+            print(f'Best Individual of Generation {gen} lineage: {lineage}')
 
         # --- Selection ---
         num_survivors = POP_SIZE // 4

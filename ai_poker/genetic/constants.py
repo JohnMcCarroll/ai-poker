@@ -5,7 +5,6 @@ Author: John McCarroll
 """
 import numpy as np
 
-# DEFINE CONSTANTS:
 
 # DEAP set up constants
 RANK_ORDER = {
@@ -55,8 +54,10 @@ ARGUMENT_TYPES = [
     float,      # CHECKRAISE%
 ]
 FLOAT_CONSTANTS = [
-    -1.0, 0.0, 0.1, 0.25, 0.333, 0.5, 0.667, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0, 3.0, 4.0, 
-    5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0
+    -14.0, -13.0, -12.0, -11.0, -10.0, -9.0, -8.0, -7.0, -6.0, -5.0, -4.0, -3.0, -2.0, -1.5, -1.25, 
+    -1.1, -1.0, -0.9, -0.75, -0.667, -0.5, -0.333, -0.25, -0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+    0.0, 0.0, 0.0, 0.1, 0.25, 0.333, 0.5, 0.667, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0, 3.0, 4.0, 5.0, 
+    6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0
 ]
 HAND_CLASSES = [
     'HIGH_CARD', 'PAIR', 'TWO_PAIR', 'THREE_OF_A_KIND', 'STRAIGHT',
@@ -69,18 +70,19 @@ BETTING_LINES = [
 ]
 HAND_STRENGTH_MAP = {i: strength for i, strength in enumerate(np.linspace(0, 1, len(HAND_CLASSES)))}
 STREET_MAP = {0: 'PREFLOP', 1: 'FLOP', 2: 'TURN', 3: 'RIVER'}
+
 # algorithm parameters constants
 INITIAL_MAX_TREE_HEIGHT = 10
-INITIAL_MIN_TREE_HEIGHT = 3
+INITIAL_MIN_TREE_HEIGHT = 2
 MAX_TREE_HEIGHT = 50
 MAX_NODE_COUNT = 50000
-VERBOSE = False
+VERBOSE = True
 POP_SIZE = 400      # TIP: keep divisible by 4
 N_GEN = 10000
-MAX_HANDS = 1000
+MAX_HANDS = 500
 EVALUATION_BENCH_SIZE = 50
 WIN_RATE_FITNESS_WEIGHT = 1.0
 NODE_COUNT_FITNESS_WEIGHT = -0.00001
 SEED = 42
 SAVE_EVERY_X_GEN = 50
-VERSION_NUM = 0.6
+VERSION_NUM = 0.7
