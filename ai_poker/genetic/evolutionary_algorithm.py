@@ -19,7 +19,6 @@ import datetime
 import inspect
 import multiprocessing
 import inspect
-from deap import gp
 from itertools import zip_longest
 from ai_poker.genetic.AST_agent import ASTAgent
 from ai_poker.genetic.constants import (
