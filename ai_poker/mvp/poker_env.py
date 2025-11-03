@@ -1,7 +1,7 @@
 from typing import List, Union, Literal, Optional, Tuple
 from clubs.poker.engine import Dealer, ObservationDict
 from clubs_gym.envs import ClubsEnv
-from clubs import error, poker, render
+from clubs import error
 
 
 class PokerDealer(Dealer):

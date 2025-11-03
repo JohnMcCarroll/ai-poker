@@ -19,6 +19,7 @@ import datetime
 import inspect
 import multiprocessing
 import inspect
+import math
 from itertools import zip_longest
 from ai_poker.genetic.AST_agent import ASTAgent
 from ai_poker.genetic.constants import (
@@ -41,7 +42,13 @@ from ai_poker.genetic.constants import (
     NODE_COUNT_FITNESS_WEIGHT,
     SEED,
     SAVE_EVERY_X_GEN,
-    VERSION_NUM
+    VERSION_NUM,
+    PROB_IMMIGRATION,
+    PROB_CROSSOVER,
+    PROB_MUTATION,
+    MIN_HANDS,
+    HAND_NUM_STEP_SIZE,
+    GEN_CURRICULUM_STEP_SIZE,
 )
 
 
@@ -325,6 +332,9 @@ logbook = tools.Logbook()
 def main():
     random.seed(SEED)
 
+    # Add curriculum: more evaluation for later evolution generations
+    hand_num_curriculum = {i:num_hands for i,num_hands in enumerate(range(MIN_HANDS, MAX_HANDS + HAND_NUM_STEP_SIZE, HAND_NUM_STEP_SIZE))}
+
     pop = toolbox.population(n=POP_SIZE)
     fossil_record = {}
 
@@ -345,12 +355,16 @@ def main():
         num_fossils = len(fossil_bench)
         num_bots_needed = EVALUATION_BENCH_SIZE - num_fossils
         full_bench = fossil_bench + bot_bench[0:num_bots_needed]
+
+
+        curriculum_step = math.floor(gen/GEN_CURRICULUM_STEP_SIZE)
+        num_hands = hand_num_curriculum[curriculum_step]
         
         for i in range(len(pop)):
             for j, opponent in enumerate(full_bench):
                 # We send the raw tree (pop[i]) and the opponent (class or tree)
                 # We use 'None' as the 'j' index to mark it as a bench match
-                tasks.append((pop[i], opponent, MAX_HANDS, i, j))
+                tasks.append((pop[i], opponent, num_hands, i, j))
         
         # --- 2. Run all tasks in parallel ---
         results_iterator = pool.imap_unordered(run_evaluation, tasks)
@@ -426,59 +440,127 @@ def main():
             'gen': gen
         }
 
-        # --- Visualize generation's best individual ---
+        # # --- Visualize generation's best individual ---
         if VERBOSE:
-            best_ind_index = pop.index(best_ind)
-            if gen == 0:
-                lineage = "New"
-            elif best_ind_index <= POP_SIZE // 4:
-                lineage = "Survivor"
-            elif best_ind_index <= POP_SIZE * 2 // 4:
-                lineage = "Crossover"
-            elif best_ind_index <= POP_SIZE * 3 // 4:
-                lineage = "Mutation"
-            else:
-                lineage = "New"
+            lineage = getattr(best_ind, "lineage", "none")
             print(f'Best Individual of Generation {gen} lineage: {lineage}')
 
-        # --- Selection ---
-        num_survivors = POP_SIZE // 4
-        survivors = toolbox.select(pop, k=num_survivors)
+        # # --- Selection ---
+        # num_survivors = POP_SIZE // 4
+        # survivors = toolbox.select(pop, k=num_survivors)
         
-        # --- Create the next generation ---
-        offspring1 = [toolbox.clone(ind) for ind in survivors]
-        offspring2 = [toolbox.clone(ind) for ind in survivors]
-        offspring3 = [toolbox.clone(ind) for ind in survivors]
+        # # --- Create the next generation ---
+        # offspring1 = [toolbox.clone(ind) for ind in survivors]
+        # offspring2 = [toolbox.clone(ind) for ind in survivors]
+        # offspring3 = [toolbox.clone(ind) for ind in survivors]
         
-        # Apply crossover
-        for child1, child2 in zip_longest(offspring2[::2], offspring2[1::2], fillvalue=None):
-            if child1 is None: 
-                toolbox.mutate(child2)
-                del child2.fitness.values
-            elif child2 is None:
-                toolbox.mutate(child1)
-                del child1.fitness.values
-            else:
+        # # Apply crossover
+        # for child1, child2 in zip_longest(offspring2[::2], offspring2[1::2], fillvalue=None):
+        #     if child1 is None: 
+        #         toolbox.mutate(child2)
+        #         del child2.fitness.values
+        #     elif child2 is None:
+        #         toolbox.mutate(child1)
+        #         del child1.fitness.values
+        #     else:
+        #         toolbox.mate(child1, child2)
+        #         del child1.fitness.values
+        #         del child2.fitness.values
+        
+        # # Apply mutation
+        # for mutant in offspring2:
+        #     toolbox.mutate(mutant)
+        #     del mutant.fitness.values
+
+        # # Introduce new organisms
+        # offspring3 = [toolbox.individual() for _ in range(len(survivors))]
+
+        # # The new population is the survivors and their offspring
+        # pop[:] = survivors + offspring1 + offspring2 + offspring3
+
+        # # Prune trees that are too large BEFORE evaluation
+        # for i, ind in enumerate(pop):
+        #     if len(ind) > MAX_NODE_COUNT:
+        #         # replace obsese tree with new individual, continue random search
+        #         pop[i] = toolbox.individual()
+
+        # ----------------------------------------------------------------------------------
+        # 1. REPRODUCTION: Standard Generational Model with Elitism and Probabilistic Operators
+        # ----------------------------------------------------------------------------------
+
+        # a. Elitism: Copy the single best individual (guarantees performance never drops)
+        # Note: We assume the fitness evaluation for the current 'pop' has just finished.
+        # elite = tools.selBest(pop, 1)[0]
+        best_ind.lineage = "Elite"
+        offspring = [toolbox.clone(best_ind)] # Start the new population with the best individual
+
+        # b. Calculate the number of individuals to be created via breeding/immigration
+        N_TO_CREATE = POP_SIZE - len(offspring) # e.g., 199
+
+        # c. Calculate the number of random immigrants to introduce
+        N_IMMIGRANTS = int(POP_SIZE * PROB_IMMIGRATION)
+        # Ensure we don't exceed the slots we need to fill
+        N_BREEDING = N_TO_CREATE - N_IMMIGRANTS
+        if N_BREEDING < 0:
+            N_BREEDING = 0
+            N_IMMIGRANTS = N_TO_CREATE
+
+        # d. Select parents for breeding (N_BREEDING needed, selected from the entire population)
+        parents = toolbox.select(pop, N_BREEDING)
+        parents = list(map(toolbox.clone, parents)) # Clone selected parents
+
+        # e. Apply Crossover and Mutation Probabilistically
+        new_children = []
+        for child1, child2 in zip_longest(parents[::2], parents[1::2], fillvalue=None):
+            
+            # --- Crossover ---
+            if child2 and random.random() < PROB_CROSSOVER: # Check PCX (e.g., 80%)
                 toolbox.mate(child1, child2)
+                child1.lineage = "Crossover"
+                child2.lineage = "Crossover"
+                # Invalidate fitness after modification
                 del child1.fitness.values
                 del child2.fitness.values
-        
-        # Apply mutation
-        for mutant in offspring2:
-            toolbox.mutate(mutant)
-            del mutant.fitness.values
+            
+            # --- Mutation ---
+            # Apply mutation to both children with PMUT probability (e.g., 10%)
+            if random.random() < PROB_MUTATION:
+                toolbox.mutate(child1)
+                lineage = getattr(child1, "lineage", "")
+                child1.lineage = lineage + "Mutation"
+                if hasattr(child1.fitness, 'values'):
+                    del child1.fitness.values
+            
+            if child2 and random.random() < PROB_MUTATION:
+                toolbox.mutate(child2)
+                lineage = getattr(child2, "lineage", "")
+                child2.lineage = lineage + "Mutation"
+                if hasattr(child2.fitness, 'values'):
+                    del child2.fitness.values
+                
+            new_children.append(child1)
+            if child2:
+                new_children.append(child2)
 
-        # Introduce new organisms
-        offspring3 = [toolbox.individual() for _ in range(len(survivors))]
+        # f. Immigration: Add new random individuals to maintain diversity
+        immigrants = [toolbox.individual() for _ in range(N_IMMIGRANTS)]
+        for ind in immigrants:
+            ind.lineage = "Immigration"
 
-        # The new population is the survivors and their offspring
-        pop[:] = survivors + offspring1 + offspring2 + offspring3
+        # g. Combine all groups to form the new generation
+        offspring.extend(new_children)
+        offspring.extend(immigrants)
+
+        # Finalize the new population list (truncate if necessary due to odd numbers in breeding)
+        pop[:] = offspring[:POP_SIZE]
 
         # Prune trees that are too large BEFORE evaluation
         for i, ind in enumerate(pop):
             if len(ind) > MAX_NODE_COUNT:
                 # replace obsese tree with new individual, continue random search
-                pop[i] = toolbox.individual()
+                new_ind = toolbox.individual()
+                new_ind.lineage = "Immigration"
+                pop[i] = new_ind
 
         # Save
         if gen % SAVE_EVERY_X_GEN == 0:
