@@ -356,8 +356,9 @@ def main():
         num_bots_needed = EVALUATION_BENCH_SIZE - num_fossils
         full_bench = fossil_bench + bot_bench[0:num_bots_needed]
 
-
         curriculum_step = math.floor(gen/GEN_CURRICULUM_STEP_SIZE)
+        if curriculum_step > max(hand_num_curriculum.keys()):
+            curriculum_step = max(hand_num_curriculum.keys())
         num_hands = hand_num_curriculum[curriculum_step]
         
         for i in range(len(pop)):
