@@ -49,6 +49,8 @@ from ai_poker.genetic.constants import (
     MIN_HANDS,
     HAND_NUM_STEP_SIZE,
     GEN_CURRICULUM_STEP_SIZE,
+    STOP_IMMIGRATION_GEN,
+    LOG
 )
 
 
@@ -98,6 +100,8 @@ def run_evaluation(task):
         else:
             # Fallback for unexpected types
             print(f"Warning: Unknown agent type in eval: {type(agent_tree_or_class)}")
+            if LOG:
+                print(f"Warning: Unknown agent type in eval: {type(agent_tree_or_class)}", file=log_file)
             return agent_tree_or_class
 
     try:
@@ -114,6 +118,8 @@ def run_evaluation(task):
     except Exception as e:
         # Catch errors from bad individuals
         print(f"Error evaluating task ({i} vs {j}): {e}")
+        if LOG:
+            print(f"Error evaluating task ({i} vs {j}): {e}", file=log_file)
         return (i, j, 0, 0, 1) # Return 0 winnings, 1 hand (to avoid divide-by-zero)
 
 def evaluate_agents(agent1_logic, agent2_logic, max_hands=500):
@@ -188,6 +194,73 @@ def evaluate_agents(agent1_logic, agent2_logic, max_hands=500):
 
     return winnings[0], winnings[1], num_hands
 
+def uniform_prune(individual, max_size):
+    """
+    Prunes an individual (PrimitiveTree) down to max_size by repeatedly applying
+    deap.tools.mutShrink until the size constraint is met. If mutShrink fails
+    (i.e., it can only shrink the tree to a single node, but size is still > 1),
+    it falls back to replacing random function subtrees with terminals.
+    
+    This operator modifies the individual in place.
+
+    Args:
+        individual (deap.gp.PrimitiveTree): The tree to be pruned.
+        pset (deap.gp.PrimitiveSetTyped): The primitive set used for the tree.
+        max_size (int): The maximum allowed size (number of nodes).
+        
+    Returns:
+        deap.gp.PrimitiveTree: The pruned individual.
+    """
+    
+    # --- Phase 1: Aggressive Shrinking using mutShrink ---
+    # Apply mutShrink repeatedly until max_size is reached or no more shrinking is possible.
+    while len(individual) > max_size and len(individual) > 1:
+        # mutShrink replaces a subtree with one of its children, guaranteeing size reduction.
+        # It returns the modified individual (or tuple if k=1, which is the default for mutShrink)
+        individual, = gp.mutShrink(individual)
+        
+        # # Invalidate caches (MANDATORY in DEAP after list modification)
+        # del individual.height
+        # del individual.height_per_node
+    
+    # # --- Phase 2: Fallback (Terminal Replacement) ---
+    # # If the tree is still too large (e.g., if max_size is very small or mutShrink was ineffective),
+    # # we fall back to the terminal replacement method.
+    # if len(individual) > max_size:
+        
+    #     # 1. Get a list of all possible float terminals (variables and constants)
+    #     float_terminals = []
+    #     for type_, term_list in pset.arguments.items():
+    #         if type_ == float:
+    #             float_terminals.extend(term_list)
+    #     if float in pset.terminals:
+    #         float_terminals.extend(pset.terminals[float])
+        
+    #     if not float_terminals:
+    #         return individual 
+            
+    #     while len(individual) > max_size:
+    #         # Find the indices of all **function** nodes (primitives) 
+    #         func_indices = [i for i, node in enumerate(individual) if isinstance(node, gp.Primitive)]
+
+    #         if not func_indices:
+    #             break # Cannot prune any further
+
+    #         # 2. Randomly select a function node's index to replace
+    #         idx_to_replace = random.choice(func_indices)
+            
+    #         # 3. Choose a simple terminal node to replace the entire subtree with
+    #         new_terminal_node = random.choice(float_terminals)()
+
+    #         # 4. Perform the replacement:
+    #         subtree_len = individual.height_per_node[idx_to_replace]
+    #         individual[idx_to_replace:idx_to_replace + subtree_len] = [new_terminal_node]
+            
+    #         # 5. Invalidate caches
+    #         del individual.height
+    #         del individual.height_per_node
+            
+    return individual
 
 # DEAP SET UP
 
@@ -307,6 +380,7 @@ toolbox.register("select", tools.selBest) # Select the best X individuals
 toolbox.register("mate", gp.cxOnePoint)
 toolbox.register("expr_mut", gp.genFull, min_=INITIAL_MIN_TREE_HEIGHT, max_=INITIAL_MAX_TREE_HEIGHT)
 toolbox.register("mutate", gp.mutUniform, expr=toolbox.expr_mut, pset=pset)
+toolbox.register("prune", uniform_prune, max_size=MAX_NODE_COUNT) 
 
 # Decorate crossover and mutation to prevent code bloat
 toolbox.decorate("mate", gp.staticLimit(key=operator.attrgetter("height"), max_value=MAX_TREE_HEIGHT))
@@ -339,6 +413,8 @@ def main():
     fossil_record = {}
 
     print("--- Starting Evolution ---")
+    if LOG:
+        print("--- Starting Evolution ---", file=log_file)
     for gen in range(N_GEN):        
         # --- 1. Prepare all evaluation tasks ---
         tasks = []
@@ -395,17 +471,20 @@ def main():
         for i, ind in enumerate(pop):
             node_count = len(ind)
             if num_hands_map[i] > 0:
-                ind.fitness.values = (winnings_map[i] / num_hands_map[i], node_count)
+                # Fitness values for win rates are in (BB/100 hands)
+                ind.fitness.values = (50 * winnings_map[i] / num_hands_map[i], node_count)
             else:
                 ind.fitness.values = (0,node_count)
                 print("WARNING: individual player had no matches")
+                if LOG:
+                    print("WARNING: individual player had no matches", file=log_file)
 
         # calc bench win rate
         bench_win_rate_map = {i: {'win_rate': 0.0, 'opponent': None} for i in range(len(full_bench))}
         highest_win_rate = {'win_rate': 0.0, 'opponent_name': None}
         for i, ind in enumerate(full_bench):
             if bench_num_hands_map[i] > 0:
-                win_rate = bench_winnings_map[i] / bench_num_hands_map[i]
+                win_rate = 50 * bench_winnings_map[i] / bench_num_hands_map[i]
                 bench_win_rate_map[i]['win_rate'] = win_rate
                 bench_win_rate_map[i]['opponent'] = ind
                 if win_rate > highest_win_rate['win_rate']:
@@ -421,9 +500,13 @@ def main():
                     highest_win_rate['opponent_name'] = opp_name
             else:
                 print("WARNING: bench player had no matches")
+                if LOG:
+                    print("WARNING: bench player had no matches", file=log_file)
         
         if VERBOSE:
             print(f'Best bench player generation {gen}: win rate: {highest_win_rate["win_rate"]}, bench player: {highest_win_rate["opponent_name"]}')
+            if LOG:
+                print(f'Best bench player generation {gen}: win rate: {highest_win_rate["win_rate"]}, bench player: {highest_win_rate["opponent_name"]}', file=log_file)
 
         # --- Log statistics ---
         win_rate_stats = stats.compile(pop)
@@ -432,6 +515,8 @@ def main():
 
         logbook.record(**record)
         print(logbook.stream)
+        if LOG:
+            print(logbook.stream, file=log_file)
 
         # --- Save the best of the generation to the fossil record
         best_ind = tools.selBest(pop, 1)[0]
@@ -445,60 +530,27 @@ def main():
         if VERBOSE:
             lineage = getattr(best_ind, "lineage", "none")
             print(f'Best Individual of Generation {gen} lineage: {lineage}')
+            if LOG:
+                print(f'Best Individual of Generation {gen} lineage: {lineage}', file=log_file)
 
         # # --- Selection ---
-        # num_survivors = POP_SIZE // 4
-        # survivors = toolbox.select(pop, k=num_survivors)
-        
-        # # --- Create the next generation ---
-        # offspring1 = [toolbox.clone(ind) for ind in survivors]
-        # offspring2 = [toolbox.clone(ind) for ind in survivors]
-        # offspring3 = [toolbox.clone(ind) for ind in survivors]
-        
-        # # Apply crossover
-        # for child1, child2 in zip_longest(offspring2[::2], offspring2[1::2], fillvalue=None):
-        #     if child1 is None: 
-        #         toolbox.mutate(child2)
-        #         del child2.fitness.values
-        #     elif child2 is None:
-        #         toolbox.mutate(child1)
-        #         del child1.fitness.values
-        #     else:
-        #         toolbox.mate(child1, child2)
-        #         del child1.fitness.values
-        #         del child2.fitness.values
-        
-        # # Apply mutation
-        # for mutant in offspring2:
-        #     toolbox.mutate(mutant)
-        #     del mutant.fitness.values
-
-        # # Introduce new organisms
-        # offspring3 = [toolbox.individual() for _ in range(len(survivors))]
-
-        # # The new population is the survivors and their offspring
-        # pop[:] = survivors + offspring1 + offspring2 + offspring3
-
-        # # Prune trees that are too large BEFORE evaluation
-        # for i, ind in enumerate(pop):
-        #     if len(ind) > MAX_NODE_COUNT:
-        #         # replace obsese tree with new individual, continue random search
-        #         pop[i] = toolbox.individual()
-
         # ----------------------------------------------------------------------------------
         # 1. REPRODUCTION: Standard Generational Model with Elitism and Probabilistic Operators
         # ----------------------------------------------------------------------------------
 
         # a. Elitism: Copy the single best individual (guarantees performance never drops)
         # Note: We assume the fitness evaluation for the current 'pop' has just finished.
-        # elite = tools.selBest(pop, 1)[0]
+
         best_ind.lineage = "Elite"
         offspring = [toolbox.clone(best_ind)] # Start the new population with the best individual
 
         # b. Calculate the number of individuals to be created via breeding/immigration
-        N_TO_CREATE = POP_SIZE - len(offspring) # e.g., 199
+        N_TO_CREATE = POP_SIZE - len(offspring)
 
         # c. Calculate the number of random immigrants to introduce
+        # if STOP_IMMIGRATION_GEN <= gen:
+        #     PROB_IMMIGRATION = 0.0
+
         N_IMMIGRANTS = int(POP_SIZE * PROB_IMMIGRATION)
         # Ensure we don't exceed the slots we need to fill
         N_BREEDING = N_TO_CREATE - N_IMMIGRANTS
@@ -519,6 +571,13 @@ def main():
                 toolbox.mate(child1, child2)
                 child1.lineage = "Crossover"
                 child2.lineage = "Crossover"
+                # enforce max node count
+                if len(child1) > MAX_NODE_COUNT:
+                    toolbox.prune(child1)
+                    child1.lineage = lineage + "Prune"
+                if len(child2) > MAX_NODE_COUNT:
+                    toolbox.prune(child2)
+                    child2.lineage = lineage + "Prune"
                 # Invalidate fitness after modification
                 del child1.fitness.values
                 del child2.fitness.values
@@ -529,6 +588,9 @@ def main():
                 toolbox.mutate(child1)
                 lineage = getattr(child1, "lineage", "")
                 child1.lineage = lineage + "Mutation"
+                if len(child1) > MAX_NODE_COUNT:
+                    toolbox.prune(child1)
+                    child1.lineage = lineage + "Prune"
                 if hasattr(child1.fitness, 'values'):
                     del child1.fitness.values
             
@@ -536,6 +598,9 @@ def main():
                 toolbox.mutate(child2)
                 lineage = getattr(child2, "lineage", "")
                 child2.lineage = lineage + "Mutation"
+                if len(child2) > MAX_NODE_COUNT:
+                    toolbox.prune(child2)
+                    child2.lineage = lineage + "Prune"
                 if hasattr(child2.fitness, 'values'):
                     del child2.fitness.values
                 
@@ -573,6 +638,8 @@ def main():
                 pickle.dump(fossil_record, f)
 
     print("--- Evolution Finished ---")
+    if LOG:
+        print("--- Evolution Finished ---", file=log_file)
 
     # --- Save, Print, and Plot Results ---
     # Save fossil record
@@ -583,9 +650,14 @@ def main():
         pickle.dump(fossil_record, f)
 
     print("\n--- Fossil Record (Best of Each Generation) ---")
+    if LOG:
+        print("\n--- Fossil Record (Best of Each Generation) ---", file=log_file)
     for gen, data in fossil_record.items():
         print(f"Gen {gen}: Fitness = {data['fitness']:.2f}")
-        print(f"  Code: {str(data['individual'])}") # Uncomment to see the evolved code
+        print(f"  Code: {str(data['individual'])}")
+        if LOG:
+            print(f"Gen {gen}: Fitness = {data['fitness']:.2f}", file=log_file)
+            print(f"  Code: {str(data['individual'])}", file=log_file)
 
     # Plotting
     gen_nums = logbook.select("gen")
@@ -609,6 +681,28 @@ def main():
 
 
 if __name__ == "__main__":
+    if LOG:
+        # Create a unique filename based on the current date and time
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_filename = f"evolution_log_{timestamp}.txt"
+        
+        # Check if a log directory exists
+        log_dir = "evolution_logs"
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+            
+        log_filepath = os.path.join(log_dir, log_filename)
+        
+        print(f"Logging all output to: {log_filepath}")
+        
+        # Context manager for file redirection
+        # This redirects all sys.stdout output to the file object
+        log_file = open(log_filepath, 'w')
+            # # Save original stdout to restore it later
+            # original_stdout = sys.stdout 
+            
+            # # Redirect stdout to the file
+            # sys.stdout = log_file
     # Create the pool once, globally.
     # This will use all available CPU cores.
     num_procs = multiprocessing.cpu_count()
@@ -629,3 +723,5 @@ if __name__ == "__main__":
         pool.close()
         pool.join()
         print("--- Program exited ---")
+        if LOG:
+            print("--- Program exited ---", file=log_file)
