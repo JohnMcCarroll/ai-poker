@@ -46,11 +46,13 @@ from ai_poker.genetic.constants import (
     PROB_IMMIGRATION,
     PROB_CROSSOVER,
     PROB_MUTATION,
+    PROB_PRUNE,
     MIN_HANDS,
     HAND_NUM_STEP_SIZE,
     GEN_CURRICULUM_STEP_SIZE,
     STOP_IMMIGRATION_GEN,
-    LOG
+    LOG,
+    EVALUATION_TIMEOUT,
 )
 
 
@@ -443,9 +445,37 @@ def main():
                 # We use 'None' as the 'j' index to mark it as a bench match
                 tasks.append((pop[i], opponent, num_hands, i, j))
         
-        # --- 2. Run all tasks in parallel ---
-        results_iterator = pool.imap_unordered(run_evaluation, tasks)
+        # # --- 2. Run all tasks in parallel ---
+        # results_iterator = pool.imap_unordered(run_evaluation, tasks)
         
+        # # # --- 3. Process results ---
+        # winnings_map = {i: 0 for i in range(len(pop))}
+        # num_hands_map = {i: 0 for i in range(len(pop))}
+        
+        # bench_winnings_map = {i: 0 for i in range(len(full_bench))}
+        # bench_num_hands_map = {i: 0 for i in range(len(full_bench))}
+
+        # # --- 3. Process results from the iterator ---
+        # for task_count, res in enumerate(results_iterator):
+        #     # This loop receives results as soon as a worker finishes one task
+        #     i, j, w1, w2, n_hands = res
+            
+        #     # Update scores for individual i
+        #     winnings_map[i] += w1
+        #     num_hands_map[i] += n_hands
+            
+        #     # Update scores for bench players
+        #     if j is not None:
+        #         bench_winnings_map[j] += w2
+        #         bench_num_hands_map[j] += n_hands
+
+        # Conceptual apply_async pattern:
+        async_results = []
+        for task in tasks:
+            # Schedule the job
+            res = pool.apply_async(run_evaluation, args=(task,))
+            async_results.append(res)
+
         # # --- 3. Process results ---
         winnings_map = {i: 0 for i in range(len(pop))}
         num_hands_map = {i: 0 for i in range(len(pop))}
@@ -453,20 +483,33 @@ def main():
         bench_winnings_map = {i: 0 for i in range(len(full_bench))}
         bench_num_hands_map = {i: 0 for i in range(len(full_bench))}
 
-        # --- 3. Process results from the iterator ---
-        for task_count, res in enumerate(results_iterator):
-            # This loop receives results as soon as a worker finishes one task
-            i, j, w1, w2, n_hands = res
-            
-            # Update scores for individual i
-            winnings_map[i] += w1
-            num_hands_map[i] += n_hands
-            
-            # Update scores for bench players
-            if j is not None:
-                bench_winnings_map[j] += w2
-                bench_num_hands_map[j] += n_hands
+        for i, res in enumerate(async_results):
+            try:
+                # Crucial: This enforces the timeout per job
+                result = res.get(timeout=EVALUATION_TIMEOUT) 
+                # Process result...
+                # This loop receives results as soon as a worker finishes one task
+                i, j, w1, w2, n_hands = result
                 
+                # Update scores for individual i
+                winnings_map[i] += w1
+                num_hands_map[i] += n_hands
+                
+                # Update scores for bench players
+                if j is not None:
+                    bench_winnings_map[j] += w2
+                    bench_num_hands_map[j] += n_hands
+            except multiprocessing.TimeoutError:
+                # Handle the hung worker and continue
+                print("Worker timed out!")
+                if LOG:
+                    print("Worker timed out!", file=log_file)
+            except Exception as e:
+                # Handle the crashed worker and continue
+                print(f"Worker crashed!\n{e}")
+                if LOG:
+                    print(f"Worker crashed!\n{e}", file=log_file)
+        
         # --- 4. Assign fitness (your code, slightly modified) ---
         for i, ind in enumerate(pop):
             node_count = len(ind)
@@ -474,10 +517,25 @@ def main():
                 # Fitness values for win rates are in (BB/100 hands)
                 ind.fitness.values = (50 * winnings_map[i] / num_hands_map[i], node_count)
             else:
-                ind.fitness.values = (0,node_count)
+                ind.fitness.values = (0, node_count)
                 print("WARNING: individual player had no matches")
                 if LOG:
                     print("WARNING: individual player had no matches", file=log_file)
+
+        raw_fitnesses = [ind.fitness.values[0] for ind in pop]
+        win_rate_std = np.std(raw_fitnesses)
+        for ind in pop:
+            raw_win_rate = ind.fitness.values[0] # Assuming raw win rate is the first metric
+            
+            # 1. Calculate Normalized Size: Penalty is 0 for trees size 1 (min)
+            # Ensure division by zero is avoided if MAX_NODE_COUNT is small
+            normalized_size = (len(ind) - 1) / (MAX_NODE_COUNT - 1)
+            
+            # 2. Calculate Dynamic Penalty
+            # The penalty scales with population variability and individual size.
+            size_penalty = NODE_COUNT_FITNESS_WEIGHT * win_rate_std * normalized_size
+
+            ind.fitness.values = (raw_win_rate, size_penalty)
 
         # calc bench win rate
         bench_win_rate_map = {i: {'win_rate': 0.0, 'opponent': None} for i in range(len(full_bench))}
@@ -601,6 +659,20 @@ def main():
                 if len(child2) > MAX_NODE_COUNT:
                     toolbox.prune(child2)
                     child2.lineage = lineage + "Prune"
+                if hasattr(child2.fitness, 'values'):
+                    del child2.fitness.values
+
+            if random.random() < PROB_PRUNE:
+                gp.mutShrink(child1)
+                lineage = getattr(child1, "lineage", "")
+                child1.lineage = lineage + "Prune"
+                if hasattr(child1.fitness, 'values'):
+                    del child1.fitness.values
+            
+            if child2 and random.random() < PROB_PRUNE:
+                gp.mutShrink(child2)
+                lineage = getattr(child2, "lineage", "")
+                child2.lineage = lineage + "Prune"
                 if hasattr(child2.fitness, 'values'):
                     del child2.fitness.values
                 
