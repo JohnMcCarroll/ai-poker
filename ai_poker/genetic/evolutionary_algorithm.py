@@ -50,7 +50,6 @@ from ai_poker.genetic.constants import (
     MIN_HANDS,
     HAND_NUM_STEP_SIZE,
     GEN_CURRICULUM_STEP_SIZE,
-    STOP_IMMIGRATION_GEN,
     LOG,
     EVALUATION_TIMEOUT,
 )
@@ -362,7 +361,7 @@ pset.renameArguments(
 # --- 2. DEAP Toolbox Setup ---
 
 # Define the fitness criteria: maximize winnings
-creator.create("FitnessMax", base.Fitness, weights=(WIN_RATE_FITNESS_WEIGHT, NODE_COUNT_FITNESS_WEIGHT))
+creator.create("FitnessMax", base.Fitness, weights=(WIN_RATE_FITNESS_WEIGHT, 1.0))
 # Define the individual: a program tree with the defined fitness
 creator.create("Individual", gp.PrimitiveTree, fitness=creator.FitnessMax)
 
@@ -529,7 +528,8 @@ def main():
             
             # 1. Calculate Normalized Size: Penalty is 0 for trees size 1 (min)
             # Ensure division by zero is avoided if MAX_NODE_COUNT is small
-            normalized_size = (len(ind) - 1) / (MAX_NODE_COUNT - 1)
+            node_count = len(ind)
+            normalized_size = (node_count - 1) / (MAX_NODE_COUNT - 1)
             
             # 2. Calculate Dynamic Penalty
             # The penalty scales with population variability and individual size.
@@ -572,9 +572,10 @@ def main():
         record = {'gen': gen, **win_rate_stats, **size_stats}
 
         logbook.record(**record)
-        print(logbook.stream)
+        gen_stats = logbook.stream
+        print(gen_stats)
         if LOG:
-            print(logbook.stream, file=log_file)
+            print(gen_stats, file=log_file)
 
         # --- Save the best of the generation to the fossil record
         best_ind = tools.selBest(pop, 1)[0]
