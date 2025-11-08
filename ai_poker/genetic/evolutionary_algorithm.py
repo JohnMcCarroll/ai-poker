@@ -416,22 +416,25 @@ def main():
     print("--- Starting Evolution ---")
     if LOG:
         print("--- Starting Evolution ---", file=log_file)
+
+    # Create bench
+    # --- Task Group 2: Benchmark (Pop vs. Bench) ---
+    static_bench = [SimpleValueAgent, StationAgent, ManiacAgent, RandomAgent, RandomAgent2]
+    num_static_bots = len(static_bench)
+    multiplier = EVALUATION_BENCH_SIZE // num_static_bots
+    full_bench = static_bench*multiplier # populate eval bench with static bots
+    bench_names = [str(i) for i in full_bench]
+    bench_gen_nums = [0 for _ in full_bench]
+    
     for gen in range(N_GEN):        
         # --- 1. Prepare all evaluation tasks ---
         tasks = []
 
-        # Create bench
-        # --- Task Group 2: Benchmark (Pop vs. Bench) ---
-        static_bench = [SimpleValueAgent, StationAgent, ManiacAgent, RandomAgent, RandomAgent2]
-        num_static_bots = len(static_bench)
-        multiplier = EVALUATION_BENCH_SIZE // num_static_bots
-        bot_bench = static_bench*multiplier # populate eval bench with static bots
-
-        fossil_bench_dicts = list(fossil_record.values())[-EVALUATION_BENCH_SIZE:]
-        fossil_bench = [fossil['individual'] for fossil in fossil_bench_dicts]
-        num_fossils = len(fossil_bench)
-        num_bots_needed = EVALUATION_BENCH_SIZE - num_fossils
-        full_bench = fossil_bench + bot_bench[0:num_bots_needed]
+        # fossil_bench_dicts = list(fossil_record.values())[-EVALUATION_BENCH_SIZE:]
+        # fossil_bench = [fossil['individual'] for fossil in fossil_bench_dicts]
+        # num_fossils = len(fossil_bench)
+        # num_bots_needed = EVALUATION_BENCH_SIZE - num_fossils
+        # full_bench = fossil_bench + bot_bench[0:num_bots_needed]
 
         curriculum_step = math.floor(gen/GEN_CURRICULUM_STEP_SIZE)
         if curriculum_step > max(hand_num_curriculum.keys()):
@@ -539,7 +542,8 @@ def main():
 
         # calc bench win rate
         bench_win_rate_map = {i: {'win_rate': 0.0, 'opponent': None} for i in range(len(full_bench))}
-        highest_win_rate = {'win_rate': 0.0, 'opponent_name': None}
+        highest_win_rate = {'win_rate': 0.0, 'opponent_name': None, 'opponent_index': None}
+        lowest_win_rate = {'win_rate': 999999999999999, 'opponent_name': None, 'opponent_index': None}
         for i, ind in enumerate(full_bench):
             if bench_num_hands_map[i] > 0:
                 win_rate = 50 * bench_winnings_map[i] / bench_num_hands_map[i]
@@ -547,24 +551,39 @@ def main():
                 bench_win_rate_map[i]['opponent'] = ind
                 if win_rate > highest_win_rate['win_rate']:
                     highest_win_rate['win_rate'] = win_rate
-                    if isinstance(ind, list):
-                        if gen >= EVALUATION_BENCH_SIZE:
-                            gen_num = i + gen - EVALUATION_BENCH_SIZE
-                        else:
-                            gen_num = i
-                        opp_name = f'Fossil Gen {gen_num}'
-                    else:
-                        opp_name = str(ind)
-                    highest_win_rate['opponent_name'] = opp_name
+                    highest_win_rate['opponent_index'] = i
+                    # if isinstance(ind, list):
+                    #     if gen >= EVALUATION_BENCH_SIZE:
+                    #         gen_num = i + gen - EVALUATION_BENCH_SIZE
+                    #     else:
+                    #         gen_num = i
+                    #     opp_name = f'Fossil Gen {gen_num}'
+                    # else:
+                    #     opp_name = str(ind)
+                    highest_win_rate['opponent_name'] = bench_names[i]
+                if win_rate < lowest_win_rate['win_rate']:
+                    lowest_win_rate['win_rate'] = win_rate
+                    lowest_win_rate['opponent_index'] = i
+                    # if isinstance(ind, list):
+                    #     if gen >= EVALUATION_BENCH_SIZE:
+                    #         gen_num = i + gen - EVALUATION_BENCH_SIZE
+                    #     else:
+                    #         gen_num = i
+                    #     opp_name = f'Fossil Gen {gen_num}'
+                    # else:
+                    #     opp_name = str(ind)
+                    lowest_win_rate['opponent_name'] = bench_names[i]
             else:
                 print("WARNING: bench player had no matches")
                 if LOG:
                     print("WARNING: bench player had no matches", file=log_file)
-        
+
         if VERBOSE:
-            print(f'Best bench player generation {gen}: win rate: {highest_win_rate["win_rate"]}, bench player: {highest_win_rate["opponent_name"]}')
+            print(f'Best bench player generation {gen}: win rate: {highest_win_rate["win_rate"]}, bench player: {highest_win_rate["opponent_name"]}, tenure: {bench_gen_nums[highest_win_rate["opponent_index"]]}')
+            print(f'Worst bench player generation {gen}: win rate: {lowest_win_rate["win_rate"]}, bench player: {lowest_win_rate["opponent_name"]}, tenure: {bench_gen_nums[lowest_win_rate["opponent_index"]]}')
             if LOG:
-                print(f'Best bench player generation {gen}: win rate: {highest_win_rate["win_rate"]}, bench player: {highest_win_rate["opponent_name"]}', file=log_file)
+                print(f'Best bench player generation {gen}: win rate: {highest_win_rate["win_rate"]}, bench player: {highest_win_rate["opponent_name"]}, tenure: {bench_gen_nums[highest_win_rate["opponent_index"]]}', file=log_file)
+                print(f'Worst bench player generation {gen}: win rate: {lowest_win_rate["win_rate"]}, bench player: {lowest_win_rate["opponent_name"]}, tenure: {bench_gen_nums[lowest_win_rate["opponent_index"]]}', file=log_file)
 
         # --- Log statistics ---
         win_rate_stats = stats.compile(pop)
@@ -584,6 +603,16 @@ def main():
             'individual': best_ind,
             'gen': gen
         }
+
+        # update bench (lowest winner gets replaced)
+        full_bench[lowest_win_rate['opponent_index']] = best_ind
+        bench_names[lowest_win_rate['opponent_index']] = f'Fossil Gen {gen}'
+        for i, tenure in enumerate(bench_gen_nums):
+            bench_gen_nums[i] += 1
+        bench_gen_nums[lowest_win_rate['opponent_index']] = 0
+        # print(full_bench)
+        # print(bench_names)
+        print(bench_gen_nums)
 
         # # --- Visualize generation's best individual ---
         if VERBOSE:
