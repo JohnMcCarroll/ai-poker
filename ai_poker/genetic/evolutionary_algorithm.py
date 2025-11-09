@@ -74,13 +74,13 @@ def get_win_rate(individual):
     """Returns the first fitness value (the win rate)."""
     if individual.fitness.valid:
         return individual.fitness.values[0]
-    return 0 # Return a very low value if invalid
+    return 0 # Return a low value if invalid
 
 def get_size(individual):
     """Returns the first fitness value (the win rate)."""
     if individual.fitness.valid:
         return individual.fitness.values[1]
-    return 0 # Return a very low value if invalid
+    return 0 # Return a low value if invalid
 
 def run_evaluation(task):
     """
@@ -198,11 +198,7 @@ def evaluate_agents(agent1_logic, agent2_logic, max_hands=500):
 def uniform_prune(individual, max_size):
     """
     Prunes an individual (PrimitiveTree) down to max_size by repeatedly applying
-    deap.tools.mutShrink until the size constraint is met. If mutShrink fails
-    (i.e., it can only shrink the tree to a single node, but size is still > 1),
-    it falls back to replacing random function subtrees with terminals.
-    
-    This operator modifies the individual in place.
+    deap.tools.mutShrink until the size constraint is met.
 
     Args:
         individual (deap.gp.PrimitiveTree): The tree to be pruned.
@@ -213,7 +209,6 @@ def uniform_prune(individual, max_size):
         deap.gp.PrimitiveTree: The pruned individual.
     """
     
-    # --- Phase 1: Aggressive Shrinking using mutShrink ---
     # Apply mutShrink repeatedly until max_size is reached or no more shrinking is possible.
     while len(individual) > max_size and len(individual) > 1:
         # mutShrink replaces a subtree with one of its children, guaranteeing size reduction.
@@ -377,7 +372,7 @@ def main():
         print("--- Starting Evolution ---", file=log_file)
 
     # Create bench
-    # --- Task Group 2: Benchmark (Pop vs. Bench) ---
+    # --- Task Group: Benchmark (Pop vs. Bench) ---
     static_bench = [SimpleValueAgent, StationAgent, ManiacAgent, RandomAgent, RandomAgent2]
     num_static_bots = len(static_bench)
     multiplier = EVALUATION_BENCH_SIZE // num_static_bots
@@ -401,7 +396,6 @@ def main():
                 tasks.append((pop[i], opponent, num_hands, i, j))
         
         # # --- 2. Run all tasks in parallel ---
-        # Conceptual apply_async pattern:
         async_results = []
         for task in tasks:
             # Schedule the job
@@ -442,22 +436,21 @@ def main():
                 if LOG:
                     print(f"Worker crashed!\n{e}", file=log_file)
         
-        # --- 4. Assign fitness (your code, slightly modified) ---
+        # --- 4. Assign fitness  ---
+        raw_win_rates = [0]*POP_SIZE
         for i, ind in enumerate(pop):
-            node_count = len(ind)
             if num_hands_map[i] > 0:
                 # Fitness values for win rates are in (BB/100 hands)
-                ind.fitness.values = (50 * winnings_map[i] / num_hands_map[i], node_count)
+                raw_win_rates[i] = 50 * winnings_map[i] / num_hands_map[i]
             else:
-                ind.fitness.values = (0, node_count)
+                raw_win_rates[i] = 0
                 print("WARNING: individual player had no matches")
                 if LOG:
                     print("WARNING: individual player had no matches", file=log_file)
-
-        raw_fitnesses = [ind.fitness.values[0] for ind in pop]
-        win_rate_std = np.std(raw_fitnesses)
-        for ind in pop:
-            raw_win_rate = ind.fitness.values[0] # Assuming raw win rate is the first metric
+        
+        win_rate_std = np.std(raw_win_rates)
+        for i, ind in enumerate(pop):
+            raw_win_rate = raw_win_rates[i]
             
             # 1. Calculate Normalized Size: Penalty is 0 for trees size 1 (min)
             # Ensure division by zero is avoided if MAX_NODE_COUNT is small
@@ -524,9 +517,10 @@ def main():
         for i, tenure in enumerate(bench_gen_nums):
             bench_gen_nums[i] += 1
         bench_gen_nums[lowest_win_rate['opponent_index']] = 0
-        # print(full_bench)
-        # print(bench_names)
+
         print(bench_gen_nums)
+        if LOG:
+            print(bench_gen_nums, log_file=log_dir)
 
         # # --- Visualize generation's best individual ---
         if VERBOSE:
@@ -540,24 +534,24 @@ def main():
         # 1. REPRODUCTION: Standard Generational Model with Elitism and Probabilistic Operators
         # ----------------------------------------------------------------------------------
 
-        # a. Elitism: Copy the single best individual (guarantees performance never drops)
+        # a. Elitism: Copy the single best individual (supposed to guarantee performance never drops)
         # Note: We assume the fitness evaluation for the current 'pop' has just finished.
 
         best_ind.lineage = "Elite"
         offspring = [toolbox.clone(best_ind)] # Start the new population with the best individual
 
         # b. Calculate the number of individuals to be created via breeding/immigration
-        N_TO_CREATE = POP_SIZE - len(offspring)
+        n_to_create = POP_SIZE - len(offspring)
 
-        N_IMMIGRANTS = int(POP_SIZE * PROB_IMMIGRATION)
+        n_immigrants = int(POP_SIZE * PROB_IMMIGRATION)
         # Ensure we don't exceed the slots we need to fill
-        N_BREEDING = N_TO_CREATE - N_IMMIGRANTS
-        if N_BREEDING < 0:
-            N_BREEDING = 0
-            N_IMMIGRANTS = N_TO_CREATE
+        n_breeding = n_to_create - n_immigrants
+        if n_breeding < 0:
+            n_breeding = 0
+            n_immigrants = n_to_create
 
-        # d. Select parents for breeding (N_BREEDING needed, selected from the entire population)
-        parents = toolbox.select(pop, N_BREEDING)
+        # d. Select parents for breeding (n_breeding needed, selected from the entire population)
+        parents = toolbox.select(pop, n_breeding)
         parents = list(map(toolbox.clone, parents)) # Clone selected parents
 
         # e. Apply Crossover and Mutation Probabilistically
@@ -621,7 +615,7 @@ def main():
                 new_children.append(child2)
 
         # f. Immigration: Add new random individuals to maintain diversity
-        immigrants = [toolbox.individual() for _ in range(N_IMMIGRANTS)]
+        immigrants = [toolbox.individual() for _ in range(n_immigrants)]
         for ind in immigrants:
             ind.lineage = "Immigration"
 
@@ -632,10 +626,11 @@ def main():
         # Finalize the new population list (truncate if necessary due to odd numbers in breeding)
         pop[:] = offspring[:POP_SIZE]
 
-        # Prune trees that are too large BEFORE evaluation
+        # Replace trees that are too large BEFORE evaluation
         for i, ind in enumerate(pop):
             if len(ind) > MAX_NODE_COUNT:
-                # replace obsese tree with new individual, continue random search
+                # replace bloated tree with new individual, continue random search
+                # pruning operations should avoid this
                 new_ind = toolbox.individual()
                 new_ind.lineage = "Immigration"
                 pop[i] = new_ind
