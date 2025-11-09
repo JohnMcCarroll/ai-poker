@@ -219,47 +219,6 @@ def uniform_prune(individual, max_size):
         # mutShrink replaces a subtree with one of its children, guaranteeing size reduction.
         # It returns the modified individual (or tuple if k=1, which is the default for mutShrink)
         individual, = gp.mutShrink(individual)
-        
-        # # Invalidate caches (MANDATORY in DEAP after list modification)
-        # del individual.height
-        # del individual.height_per_node
-    
-    # # --- Phase 2: Fallback (Terminal Replacement) ---
-    # # If the tree is still too large (e.g., if max_size is very small or mutShrink was ineffective),
-    # # we fall back to the terminal replacement method.
-    # if len(individual) > max_size:
-        
-    #     # 1. Get a list of all possible float terminals (variables and constants)
-    #     float_terminals = []
-    #     for type_, term_list in pset.arguments.items():
-    #         if type_ == float:
-    #             float_terminals.extend(term_list)
-    #     if float in pset.terminals:
-    #         float_terminals.extend(pset.terminals[float])
-        
-    #     if not float_terminals:
-    #         return individual 
-            
-    #     while len(individual) > max_size:
-    #         # Find the indices of all **function** nodes (primitives) 
-    #         func_indices = [i for i, node in enumerate(individual) if isinstance(node, gp.Primitive)]
-
-    #         if not func_indices:
-    #             break # Cannot prune any further
-
-    #         # 2. Randomly select a function node's index to replace
-    #         idx_to_replace = random.choice(func_indices)
-            
-    #         # 3. Choose a simple terminal node to replace the entire subtree with
-    #         new_terminal_node = random.choice(float_terminals)()
-
-    #         # 4. Perform the replacement:
-    #         subtree_len = individual.height_per_node[idx_to_replace]
-    #         individual[idx_to_replace:idx_to_replace + subtree_len] = [new_terminal_node]
-            
-    #         # 5. Invalidate caches
-    #         del individual.height
-    #         del individual.height_per_node
             
     return individual
 
@@ -430,12 +389,6 @@ def main():
         # --- 1. Prepare all evaluation tasks ---
         tasks = []
 
-        # fossil_bench_dicts = list(fossil_record.values())[-EVALUATION_BENCH_SIZE:]
-        # fossil_bench = [fossil['individual'] for fossil in fossil_bench_dicts]
-        # num_fossils = len(fossil_bench)
-        # num_bots_needed = EVALUATION_BENCH_SIZE - num_fossils
-        # full_bench = fossil_bench + bot_bench[0:num_bots_needed]
-
         curriculum_step = math.floor(gen/GEN_CURRICULUM_STEP_SIZE)
         if curriculum_step > max(hand_num_curriculum.keys()):
             curriculum_step = max(hand_num_curriculum.keys())
@@ -448,29 +401,6 @@ def main():
                 tasks.append((pop[i], opponent, num_hands, i, j))
         
         # # --- 2. Run all tasks in parallel ---
-        # results_iterator = pool.imap_unordered(run_evaluation, tasks)
-        
-        # # # --- 3. Process results ---
-        # winnings_map = {i: 0 for i in range(len(pop))}
-        # num_hands_map = {i: 0 for i in range(len(pop))}
-        
-        # bench_winnings_map = {i: 0 for i in range(len(full_bench))}
-        # bench_num_hands_map = {i: 0 for i in range(len(full_bench))}
-
-        # # --- 3. Process results from the iterator ---
-        # for task_count, res in enumerate(results_iterator):
-        #     # This loop receives results as soon as a worker finishes one task
-        #     i, j, w1, w2, n_hands = res
-            
-        #     # Update scores for individual i
-        #     winnings_map[i] += w1
-        #     num_hands_map[i] += n_hands
-            
-        #     # Update scores for bench players
-        #     if j is not None:
-        #         bench_winnings_map[j] += w2
-        #         bench_num_hands_map[j] += n_hands
-
         # Conceptual apply_async pattern:
         async_results = []
         for task in tasks:
@@ -552,26 +482,10 @@ def main():
                 if win_rate > highest_win_rate['win_rate']:
                     highest_win_rate['win_rate'] = win_rate
                     highest_win_rate['opponent_index'] = i
-                    # if isinstance(ind, list):
-                    #     if gen >= EVALUATION_BENCH_SIZE:
-                    #         gen_num = i + gen - EVALUATION_BENCH_SIZE
-                    #     else:
-                    #         gen_num = i
-                    #     opp_name = f'Fossil Gen {gen_num}'
-                    # else:
-                    #     opp_name = str(ind)
                     highest_win_rate['opponent_name'] = bench_names[i]
                 if win_rate < lowest_win_rate['win_rate']:
                     lowest_win_rate['win_rate'] = win_rate
                     lowest_win_rate['opponent_index'] = i
-                    # if isinstance(ind, list):
-                    #     if gen >= EVALUATION_BENCH_SIZE:
-                    #         gen_num = i + gen - EVALUATION_BENCH_SIZE
-                    #     else:
-                    #         gen_num = i
-                    #     opp_name = f'Fossil Gen {gen_num}'
-                    # else:
-                    #     opp_name = str(ind)
                     lowest_win_rate['opponent_name'] = bench_names[i]
             else:
                 print("WARNING: bench player had no matches")
@@ -634,10 +548,6 @@ def main():
 
         # b. Calculate the number of individuals to be created via breeding/immigration
         N_TO_CREATE = POP_SIZE - len(offspring)
-
-        # c. Calculate the number of random immigrants to introduce
-        # if STOP_IMMIGRATION_GEN <= gen:
-        #     PROB_IMMIGRATION = 0.0
 
         N_IMMIGRANTS = int(POP_SIZE * PROB_IMMIGRATION)
         # Ensure we don't exceed the slots we need to fill
@@ -797,14 +707,8 @@ if __name__ == "__main__":
         
         print(f"Logging all output to: {log_filepath}")
         
-        # Context manager for file redirection
-        # This redirects all sys.stdout output to the file object
         log_file = open(log_filepath, 'w')
-            # # Save original stdout to restore it later
-            # original_stdout = sys.stdout 
-            
-            # # Redirect stdout to the file
-            # sys.stdout = log_file
+
     # Create the pool once, globally.
     # This will use all available CPU cores.
     num_procs = multiprocessing.cpu_count()
