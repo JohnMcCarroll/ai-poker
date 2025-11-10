@@ -535,20 +535,15 @@ def main():
         # 1. REPRODUCTION: Standard Generational Model with Elitism and Probabilistic Operators
         # ----------------------------------------------------------------------------------
 
-        # a. Elitism: Copy the best individuals (supposed to guarantee performance never drops)
+        # a. Elitism: Copy the best individuals (attempt to guarantee performance never drops)
         # Note: We assume the fitness evaluation for the current 'pop' has just finished.
 
         num_elites = math.floor(ELITE_PCT*POP_SIZE)
         elites = tools.selBest(pop, num_elites)
-        print(elites)
         offspring = []
         for elite in elites:
-            elite_ind = elite[0]
-            elite_ind.lineage = "Elite"
-            offspring.append(toolbox.clone(elite_ind))
-
-        # best_ind.lineage = "Elite"
-        # offspring = [toolbox.clone(best_ind)] # Start the new population with the best individual
+            elite.lineage = "Elite"
+            offspring.append(toolbox.clone(elite))
 
         # b. Calculate the number of individuals to be created via breeding/immigration
         n_to_create = POP_SIZE - len(offspring)
