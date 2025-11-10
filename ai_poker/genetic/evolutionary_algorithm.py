@@ -538,7 +538,7 @@ def main():
         # a. Elitism: Copy the best individuals (attempt to guarantee performance never drops)
         # Note: We assume the fitness evaluation for the current 'pop' has just finished.
 
-        num_elites = math.floor(ELITE_PCT*POP_SIZE)
+        num_elites = int(ELITE_PCT*POP_SIZE)
         elites = tools.selBest(pop, num_elites)
         offspring = []
         for elite in elites:
