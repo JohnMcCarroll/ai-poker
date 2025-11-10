@@ -105,12 +105,14 @@ class HumanAgent(BaseAgent):
 
 if __name__ == '__main__':
     # Load fossil
-    file_name = 'fossils_v0.5_gen950_2025-10-31_21-28-23.pkl'
-    FOSSILS_DIR = os.path.dirname(__file__) + "\\fossils\\"
-    with open(FOSSILS_DIR + file_name, 'rb') as f:
+    file_name = '/home/john/personal_project/ai-poker/ai_poker/genetic\\fossils\\fossils_v1.1_gen125_2025-11-09_13-59-55.pkl'
+    # FOSSILS_DIR = os.path.dirname(__file__) + "\\fossils\\"
+    # with open(FOSSILS_DIR + file_name, 'rb') as f:
+    with open(file_name, 'rb') as f:
         fossil_record = pickle.load(f)
 
-    latest_ast = list(fossil_record.values())[-1]['individual']
+    # latest_ast = list(fossil_record.values())[-1]['individual']
+    latest_ast = fossil_record[116]['individual']
     
     deap_ind = creator.Individual(latest_ast)
     ast_code = toolbox.compile(expr=deap_ind)
@@ -163,7 +165,8 @@ if __name__ == '__main__':
 
         if all(done):
             obs = env.reset()
-            time.sleep(3)
+            time.sleep(5)
+            viz.update()
             viz.display()
 
 

@@ -52,6 +52,7 @@ from ai_poker.genetic.constants import (
     GEN_CURRICULUM_STEP_SIZE,
     LOG,
     EVALUATION_TIMEOUT,
+    ELITE_PCT,
 )
 
 
@@ -520,7 +521,7 @@ def main():
 
         print(bench_gen_nums)
         if LOG:
-            print(bench_gen_nums, log_file=log_dir)
+            print(bench_gen_nums, file=log_file)
 
         # # --- Visualize generation's best individual ---
         if VERBOSE:
@@ -534,11 +535,20 @@ def main():
         # 1. REPRODUCTION: Standard Generational Model with Elitism and Probabilistic Operators
         # ----------------------------------------------------------------------------------
 
-        # a. Elitism: Copy the single best individual (supposed to guarantee performance never drops)
+        # a. Elitism: Copy the best individuals (supposed to guarantee performance never drops)
         # Note: We assume the fitness evaluation for the current 'pop' has just finished.
 
-        best_ind.lineage = "Elite"
-        offspring = [toolbox.clone(best_ind)] # Start the new population with the best individual
+        num_elites = math.floor(ELITE_PCT*POP_SIZE)
+        elites = tools.selBest(pop, num_elites)
+        print(elites)
+        offspring = []
+        for elite in elites:
+            elite_ind = elite[0]
+            elite_ind.lineage = "Elite"
+            offspring.append(toolbox.clone(elite_ind))
+
+        # best_ind.lineage = "Elite"
+        # offspring = [toolbox.clone(best_ind)] # Start the new population with the best individual
 
         # b. Calculate the number of individuals to be created via breeding/immigration
         n_to_create = POP_SIZE - len(offspring)
