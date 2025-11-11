@@ -31,7 +31,6 @@ from ai_poker.genetic.constants import (
     BETTING_LINES,
     INITIAL_MAX_TREE_HEIGHT,
     INITIAL_MIN_TREE_HEIGHT,
-    MAX_TREE_HEIGHT,
     MAX_NODE_COUNT,
     VERBOSE,
     POP_SIZE,
@@ -43,7 +42,8 @@ from ai_poker.genetic.constants import (
     SEED,
     SAVE_EVERY_X_GEN,
     VERSION_NUM,
-    PROB_IMMIGRATION,
+    IMMIGRATION_PCT,
+    ELITE_PCT,
     PROB_CROSSOVER,
     PROB_MUTATION,
     PROB_PRUNE,
@@ -52,7 +52,6 @@ from ai_poker.genetic.constants import (
     GEN_CURRICULUM_STEP_SIZE,
     LOG,
     EVALUATION_TIMEOUT,
-    ELITE_PCT,
 )
 
 
@@ -339,8 +338,8 @@ toolbox.register("mutate", gp.mutUniform, expr=toolbox.expr_mut, pset=pset)
 toolbox.register("prune", uniform_prune, max_size=MAX_NODE_COUNT) 
 
 # Decorate crossover and mutation to prevent code bloat
-toolbox.decorate("mate", gp.staticLimit(key=operator.attrgetter("height"), max_value=MAX_TREE_HEIGHT))
-toolbox.decorate("mutate", gp.staticLimit(key=operator.attrgetter("height"), max_value=MAX_TREE_HEIGHT))
+# toolbox.decorate("mate", gp.staticLimit(key=operator.attrgetter("height"), max_value=MAX_TREE_HEIGHT))
+# toolbox.decorate("mutate", gp.staticLimit(key=operator.attrgetter("height"), max_value=MAX_TREE_HEIGHT))
 
 # Initialize statistics
 stats = tools.Statistics(key=get_win_rate)
@@ -548,7 +547,7 @@ def main():
         # b. Calculate the number of individuals to be created via breeding/immigration
         n_to_create = POP_SIZE - len(offspring)
 
-        n_immigrants = int(POP_SIZE * PROB_IMMIGRATION)
+        n_immigrants = int(POP_SIZE * IMMIGRATION_PCT)
         # Ensure we don't exceed the slots we need to fill
         n_breeding = n_to_create - n_immigrants
         if n_breeding < 0:
