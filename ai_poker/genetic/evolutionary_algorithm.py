@@ -583,8 +583,7 @@ def main():
             # Apply mutation to both children with PMUT probability (e.g., 10%)
             if random_value >= PROB_MUTATION and random_value < PROB_MUTATION + PROB_CROSSOVER:
                 toolbox.mutate(child1)
-                lineage = getattr(child1, "lineage", "")
-                child1.lineage = lineage + "Mutation"
+                child1.lineage = "Mutation"
                 if len(child1) > MAX_NODE_COUNT:
                     toolbox.prune(child1)
                     child1.lineage = lineage + "ForcedPrune"
@@ -593,8 +592,7 @@ def main():
             
             if child2 and random_value >= PROB_MUTATION and random_value < PROB_MUTATION + PROB_CROSSOVER:
                 toolbox.mutate(child2)
-                lineage = getattr(child2, "lineage", "")
-                child2.lineage = lineage + "Mutation"
+                child2.lineage = "Mutation"
                 if len(child2) > MAX_NODE_COUNT:
                     toolbox.prune(child2)
                     child2.lineage = lineage + "ForcedPrune"
@@ -603,15 +601,13 @@ def main():
 
             if random_value >= PROB_MUTATION + PROB_CROSSOVER:
                 gp.mutShrink(child1)
-                lineage = getattr(child1, "lineage", "")
-                child1.lineage = lineage + "Prune"
+                child1.lineage = "Prune"
                 if hasattr(child1.fitness, 'values'):
                     del child1.fitness.values
             
             if child2 and random_value >= PROB_MUTATION + PROB_CROSSOVER:
                 gp.mutShrink(child2)
-                lineage = getattr(child2, "lineage", "")
-                child2.lineage = lineage + "Prune"
+                child2.lineage = "Prune"
                 if hasattr(child2.fitness, 'values'):
                     del child2.fitness.values
                 
