@@ -10,8 +10,7 @@ import numpy as np
 from deap import base, creator, tools, gp
 import matplotlib.pyplot as plt
 from ai_poker.mvp.poker_env import PokerEnv
-from ai_poker.mvp.agents import RandomAgent, RandomAgent2
-from ai_poker.genetic.simple_agents import ManiacAgent, StationAgent, SimpleValueAgent
+from ai_poker.genetic.simple_agents import StationAgent, SimpleValueAgent
 import random
 import os
 import pickle
@@ -373,7 +372,7 @@ def main():
 
     # Create bench
     # --- Task Group: Benchmark (Pop vs. Bench) ---
-    static_bench = [SimpleValueAgent, StationAgent, ManiacAgent, RandomAgent, RandomAgent2]
+    static_bench = [SimpleValueAgent, StationAgent]
     num_static_bots = len(static_bench)
     multiplier = EVALUATION_BENCH_SIZE // num_static_bots
     full_bench = static_bench*multiplier # populate eval bench with static bots
@@ -464,9 +463,9 @@ def main():
             ind.fitness.values = (raw_win_rate, size_penalty)
 
         # calc bench win rate
-        bench_win_rate_map = {i: {'win_rate': 0.0, 'opponent': None} for i in range(len(full_bench))}
-        highest_win_rate = {'win_rate': 0.0, 'opponent_name': None, 'opponent_index': None}
-        lowest_win_rate = {'win_rate': 999999999999999, 'opponent_name': None, 'opponent_index': None}
+        bench_win_rate_map = {i: {'win_rate': 0.0, 'opponent': "None"} for i in range(len(full_bench))}
+        highest_win_rate = {'win_rate': -math.inf, 'opponent_name': "None", 'opponent_index': 0}
+        lowest_win_rate = {'win_rate': math.inf, 'opponent_name': "None", 'opponent_index': 0}
         for i, ind in enumerate(full_bench):
             if bench_num_hands_map[i] > 0:
                 win_rate = 50 * bench_winnings_map[i] / bench_num_hands_map[i]
@@ -487,7 +486,7 @@ def main():
 
         if VERBOSE:
             print(f'Best bench player generation {gen}: win rate: {highest_win_rate["win_rate"]}, bench player: {highest_win_rate["opponent_name"]}, tenure: {bench_gen_nums[highest_win_rate["opponent_index"]]}')
-            print(f'Worst bench player generation {gen}: win rate: {lowest_win_rate["win_rate"]}, bench player: {lowest_win_rate["opponent_name"]}, tenure: {bench_gen_nums[lowest_win_rate["opponent_index"]]}')
+            print(f'Worst bench player generation {gen}: win rate: {lowest_win_rate["win_rate"]}, bench player: {lowest_win_rate["opponent_name"]}, tenure: {bench_gen_nums[lowest_win_rate["opponent_index"]]}') # raised error
             if LOG:
                 print(f'Best bench player generation {gen}: win rate: {highest_win_rate["win_rate"]}, bench player: {highest_win_rate["opponent_name"]}, tenure: {bench_gen_nums[highest_win_rate["opponent_index"]]}', file=log_file)
                 print(f'Worst bench player generation {gen}: win rate: {lowest_win_rate["win_rate"]}, bench player: {lowest_win_rate["opponent_name"]}, tenure: {bench_gen_nums[lowest_win_rate["opponent_index"]]}', file=log_file)
@@ -514,7 +513,7 @@ def main():
         # update bench (lowest winner gets replaced)
         full_bench[lowest_win_rate['opponent_index']] = best_ind
         bench_names[lowest_win_rate['opponent_index']] = f'Fossil Gen {gen}'
-        for i, tenure in enumerate(bench_gen_nums):
+        for i, _ in enumerate(bench_gen_nums):
             bench_gen_nums[i] += 1
         bench_gen_nums[lowest_win_rate['opponent_index']] = 0
 
@@ -525,9 +524,9 @@ def main():
         # # --- Visualize generation's best individual ---
         if VERBOSE:
             lineage = getattr(best_ind, "lineage", "none")
-            print(f'Best Individual of Generation {gen} lineage: {lineage}')
+            print(f'Best Individual of Generation {gen}: lineage: {lineage}, size: {len(best_ind)}, win rate: {best_ind.fitness.values[0]}')
             if LOG:
-                print(f'Best Individual of Generation {gen} lineage: {lineage}', file=log_file)
+                print(f'Best Individual of Generation {gen} lineage: {lineage}, size: {len(best_ind)}, win rate: {best_ind.fitness.values[0]}', file=log_file)
 
         # # --- Selection ---
         # ----------------------------------------------------------------------------------
@@ -561,53 +560,55 @@ def main():
         # e. Apply Crossover and Mutation Probabilistically
         new_children = []
         for child1, child2 in zip_longest(parents[::2], parents[1::2], fillvalue=None):
+
+            random_value = random.random()
             
             # --- Crossover ---
-            if child2 and random.random() < PROB_CROSSOVER: # Check PCX (e.g., 80%)
+            if child2 and random_value < PROB_CROSSOVER: # Check PCX (e.g., 80%)
                 toolbox.mate(child1, child2)
                 child1.lineage = "Crossover"
                 child2.lineage = "Crossover"
                 # enforce max node count
                 if len(child1) > MAX_NODE_COUNT:
                     toolbox.prune(child1)
-                    child1.lineage = lineage + "Prune"
+                    child1.lineage = lineage + "ForcedPrune"
                 if len(child2) > MAX_NODE_COUNT:
                     toolbox.prune(child2)
-                    child2.lineage = lineage + "Prune"
+                    child2.lineage = lineage + "ForcedPrune"
                 # Invalidate fitness after modification
                 del child1.fitness.values
                 del child2.fitness.values
             
             # --- Mutation ---
             # Apply mutation to both children with PMUT probability (e.g., 10%)
-            if random.random() < PROB_MUTATION:
+            if random_value >= PROB_MUTATION and random_value < PROB_MUTATION + PROB_CROSSOVER:
                 toolbox.mutate(child1)
                 lineage = getattr(child1, "lineage", "")
                 child1.lineage = lineage + "Mutation"
                 if len(child1) > MAX_NODE_COUNT:
                     toolbox.prune(child1)
-                    child1.lineage = lineage + "Prune"
+                    child1.lineage = lineage + "ForcedPrune"
                 if hasattr(child1.fitness, 'values'):
                     del child1.fitness.values
             
-            if child2 and random.random() < PROB_MUTATION:
+            if child2 and random_value >= PROB_MUTATION and random_value < PROB_MUTATION + PROB_CROSSOVER:
                 toolbox.mutate(child2)
                 lineage = getattr(child2, "lineage", "")
                 child2.lineage = lineage + "Mutation"
                 if len(child2) > MAX_NODE_COUNT:
                     toolbox.prune(child2)
-                    child2.lineage = lineage + "Prune"
+                    child2.lineage = lineage + "ForcedPrune"
                 if hasattr(child2.fitness, 'values'):
                     del child2.fitness.values
 
-            if random.random() < PROB_PRUNE:
+            if random_value >= PROB_MUTATION + PROB_CROSSOVER:
                 gp.mutShrink(child1)
                 lineage = getattr(child1, "lineage", "")
                 child1.lineage = lineage + "Prune"
                 if hasattr(child1.fitness, 'values'):
                     del child1.fitness.values
             
-            if child2 and random.random() < PROB_PRUNE:
+            if child2 and random_value >= PROB_MUTATION + PROB_CROSSOVER:
                 gp.mutShrink(child2)
                 lineage = getattr(child2, "lineage", "")
                 child2.lineage = lineage + "Prune"
@@ -639,14 +640,20 @@ def main():
                 new_ind.lineage = "Immigration"
                 pop[i] = new_ind
 
-        # Save
+        # Save Checkpoint
         if gen % SAVE_EVERY_X_GEN == 0:
-            # Save fossil record
+            # Save fossil record, bench + pop to enable restarts
+            checkpoint_dict = {
+                "fossil_record": fossil_record,
+                "bench": full_bench,
+                "bench_tenures": bench_gen_nums,
+                "population": pop
+            }
             cur_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            save_id = f"fossils_v{VERSION_NUM}_gen{gen}_{cur_time}"
+            save_id = f"evo_ckpt_v{VERSION_NUM}_gen{gen}_{cur_time}"
             save_path = f"{os.path.dirname(__file__)}\\fossils\\{save_id}.pkl" # Windows file path format
             with open(save_path, 'wb') as f:
-                pickle.dump(fossil_record, f)
+                pickle.dump(checkpoint_dict, f)
 
     print("--- Evolution Finished ---")
     if LOG:
@@ -698,7 +705,7 @@ if __name__ == "__main__":
         log_filename = f"evolution_log_{timestamp}.txt"
         
         # Check if a log directory exists
-        log_dir = "evolution_logs"
+        log_dir = f"evolution_{VERSION_NUM}_logs"
         if not os.path.exists(log_dir):
             os.makedirs(log_dir)
             
