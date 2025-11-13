@@ -74,7 +74,7 @@ STREET_MAP = {0: 'PREFLOP', 1: 'FLOP', 2: 'TURN', 3: 'RIVER'}
 # algorithm parameters constants
 INITIAL_MAX_TREE_HEIGHT = 10
 INITIAL_MIN_TREE_HEIGHT = 3
-MAX_NODE_COUNT = 60000
+MAX_NODE_COUNT = 20000
 ELITE_PCT = 0.05
 IMMIGRATION_PCT = 0.05
 # mutation, prune, and crossover probabilities should add up to 1.0
@@ -86,7 +86,7 @@ POP_SIZE = 500
 N_GEN = 10000
 MAX_HANDS = 400
 MIN_HANDS = 100
-HAND_NUM_STEP_SIZE = 50
+HAND_NUM_STEP_SIZE = 25
 GEN_CURRICULUM_STEP_SIZE = 200
 EVALUATION_BENCH_SIZE = 50
 WIN_RATE_FITNESS_WEIGHT = 1.0
@@ -97,3 +97,5 @@ VERSION_NUM = 1.3
 LOG = True
 VERBOSE = True
 EVALUATION_TIMEOUT = 600
+RESTART_FROM_CKPT = None
+# RESTART_FROM_CKPT = "C:\\Users\\John\Desktop\\poker_bot\\ai-poker\\ai_poker\\genetic\\fossils\\evo_ckpt_v1.3_gen130_2025-11-13_09-41-10.pkl"

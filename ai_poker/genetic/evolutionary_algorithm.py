@@ -51,6 +51,7 @@ from ai_poker.genetic.constants import (
     GEN_CURRICULUM_STEP_SIZE,
     LOG,
     EVALUATION_TIMEOUT,
+    RESTART_FROM_CKPT
 )
 
 
@@ -358,13 +359,18 @@ logbook = tools.Logbook()
 # DEFINE MAIN EVOLUTIONARY LOOP
 
 def main():
+    ckpt_dict = {}
+    if RESTART_FROM_CKPT:
+        with open(RESTART_FROM_CKPT, 'rb') as ckpt_file:
+            ckpt_dict = pickle.load(ckpt_file)
+
     random.seed(SEED)
 
     # Add curriculum: more evaluation for later evolution generations
     hand_num_curriculum = {i:num_hands for i,num_hands in enumerate(range(MIN_HANDS, MAX_HANDS + HAND_NUM_STEP_SIZE, HAND_NUM_STEP_SIZE))}
 
-    pop = toolbox.population(n=POP_SIZE)
-    fossil_record = {}
+    pop = ckpt_dict.get('population', toolbox.population(n=POP_SIZE))
+    fossil_record = ckpt_dict.get('fossil_record', {})
 
     print("--- Starting Evolution ---")
     if LOG:
@@ -375,11 +381,12 @@ def main():
     static_bench = [SimpleValueAgent, StationAgent]
     num_static_bots = len(static_bench)
     multiplier = EVALUATION_BENCH_SIZE // num_static_bots
-    full_bench = static_bench*multiplier # populate eval bench with static bots
+    full_bench = ckpt_dict.get('bench', static_bench*multiplier) # populate eval bench with static bots
     bench_names = [str(i) for i in full_bench]
-    bench_gen_nums = [0 for _ in full_bench]
+    bench_tenures = ckpt_dict.get('bench_tenures', [0 for _ in full_bench])
+    starting_gen = ckpt_dict.get('generation', -1) + 1
     
-    for gen in range(N_GEN):        
+    for gen in range(starting_gen, N_GEN):        
         # --- 1. Prepare all evaluation tasks ---
         tasks = []
 
@@ -485,11 +492,11 @@ def main():
                     print("WARNING: bench player had no matches", file=log_file)
 
         if VERBOSE:
-            print(f'Best bench player generation {gen}: win rate: {highest_win_rate["win_rate"]}, bench player: {highest_win_rate["opponent_name"]}, tenure: {bench_gen_nums[highest_win_rate["opponent_index"]]}')
-            print(f'Worst bench player generation {gen}: win rate: {lowest_win_rate["win_rate"]}, bench player: {lowest_win_rate["opponent_name"]}, tenure: {bench_gen_nums[lowest_win_rate["opponent_index"]]}') # raised error
+            print(f'Best bench player generation {gen}: win rate: {highest_win_rate["win_rate"]}, bench player: {highest_win_rate["opponent_name"]}, tenure: {bench_tenures[highest_win_rate["opponent_index"]]}')
+            print(f'Worst bench player generation {gen}: win rate: {lowest_win_rate["win_rate"]}, bench player: {lowest_win_rate["opponent_name"]}, tenure: {bench_tenures[lowest_win_rate["opponent_index"]]}') # raised error
             if LOG:
-                print(f'Best bench player generation {gen}: win rate: {highest_win_rate["win_rate"]}, bench player: {highest_win_rate["opponent_name"]}, tenure: {bench_gen_nums[highest_win_rate["opponent_index"]]}', file=log_file)
-                print(f'Worst bench player generation {gen}: win rate: {lowest_win_rate["win_rate"]}, bench player: {lowest_win_rate["opponent_name"]}, tenure: {bench_gen_nums[lowest_win_rate["opponent_index"]]}', file=log_file)
+                print(f'Best bench player generation {gen}: win rate: {highest_win_rate["win_rate"]}, bench player: {highest_win_rate["opponent_name"]}, tenure: {bench_tenures[highest_win_rate["opponent_index"]]}', file=log_file)
+                print(f'Worst bench player generation {gen}: win rate: {lowest_win_rate["win_rate"]}, bench player: {lowest_win_rate["opponent_name"]}, tenure: {bench_tenures[lowest_win_rate["opponent_index"]]}', file=log_file)
 
         # --- Log statistics ---
         win_rate_stats = stats.compile(pop)
@@ -513,13 +520,13 @@ def main():
         # update bench (lowest winner gets replaced)
         full_bench[lowest_win_rate['opponent_index']] = best_ind
         bench_names[lowest_win_rate['opponent_index']] = f'Fossil Gen {gen}'
-        for i, _ in enumerate(bench_gen_nums):
-            bench_gen_nums[i] += 1
-        bench_gen_nums[lowest_win_rate['opponent_index']] = 0
+        for i, _ in enumerate(bench_tenures):
+            bench_tenures[i] += 1
+        bench_tenures[lowest_win_rate['opponent_index']] = 0
 
-        print(bench_gen_nums)
+        print(bench_tenures)
         if LOG:
-            print(bench_gen_nums, file=log_file)
+            print(bench_tenures, file=log_file)
 
         # # --- Visualize generation's best individual ---
         if VERBOSE:
@@ -642,8 +649,9 @@ def main():
             checkpoint_dict = {
                 "fossil_record": fossil_record,
                 "bench": full_bench,
-                "bench_tenures": bench_gen_nums,
-                "population": pop
+                "bench_tenures": bench_tenures,
+                "population": pop,
+                "generation": gen,
             }
             cur_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             save_id = f"evo_ckpt_v{VERSION_NUM}_gen{gen}_{cur_time}"
