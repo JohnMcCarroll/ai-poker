@@ -288,28 +288,29 @@ pset.renameArguments(
     ARG13='board_smallest_3_card_span',
 
     ARG14='hole_suited',
-    ARG15='hole_highest_card',
-    ARG16='hole_paired',
-    ARG17='hole_flush_draw',
-    ARG18='hole_open_straight_draw',
-    ARG19='hole_gutshot_straight_draw',
+    ARG15='hole_high_card',
+    ARG16='hole_low_card',
+    ARG17='hole_paired',
+    ARG18='hole_flush_draw',
+    ARG19='hole_open_straight_draw',
+    ARG20='hole_gutshot_straight_draw',
 
-    ARG20='preflop_opponent_line',
-    ARG21='flop_opponent_line',
-    ARG22='turn_opponent_line',
-    ARG23='river_opponent_line',
+    ARG21='preflop_opponent_line',
+    ARG22='flop_opponent_line',
+    ARG23='turn_opponent_line',
+    ARG24='river_opponent_line',
 
-    ARG24='num_hands',
-    ARG25='VPIP',
-    ARG26='PFR_PCT',
-    ARG27='THREEBET_PCT',
-    ARG28='WTSD',
-    ARG29='WSD',
-    ARG30='WWSF',
-    ARG31='AF',
-    ARG32='CBET_PCT',
-    ARG33='DONK_PCT',
-    ARG34='CHECKRAISE_PCT',
+    ARG25='num_hands',
+    ARG26='VPIP',
+    ARG27='PFR_PCT',
+    ARG28='THREEBET_PCT',
+    ARG29='WTSD',
+    ARG30='WSD',
+    ARG31='WWSF',
+    ARG32='AF',
+    ARG33='CBET_PCT',
+    ARG34='DONK_PCT',
+    ARG35='CHECKRAISE_PCT',
 )
 
 # --- 2. DEAP Toolbox Setup ---
@@ -336,10 +337,6 @@ toolbox.register("mate", gp.cxOnePoint)
 toolbox.register("expr_mut", gp.genFull, min_=INITIAL_MIN_TREE_HEIGHT, max_=INITIAL_MAX_TREE_HEIGHT)
 toolbox.register("mutate", gp.mutUniform, expr=toolbox.expr_mut, pset=pset)
 toolbox.register("prune", uniform_prune, max_size=MAX_NODE_COUNT) 
-
-# Decorate crossover and mutation to prevent code bloat
-# toolbox.decorate("mate", gp.staticLimit(key=operator.attrgetter("height"), max_value=MAX_TREE_HEIGHT))
-# toolbox.decorate("mutate", gp.staticLimit(key=operator.attrgetter("height"), max_value=MAX_TREE_HEIGHT))
 
 # Initialize statistics
 stats = tools.Statistics(key=get_win_rate)

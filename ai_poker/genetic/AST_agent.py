@@ -579,7 +579,8 @@ class ASTAgent(BaseAgent):
 
         # player's hand
         hole_suited = hole_cards[0].suit == hole_cards[1].suit
-        hole_highest_card = max(RANK_ORDER[hole_cards[0].rank],RANK_ORDER[hole_cards[1].rank])
+        hole_high_card = max(RANK_ORDER[hole_cards[0].rank],RANK_ORDER[hole_cards[1].rank])
+        hole_low_card = min(RANK_ORDER[hole_cards[0].rank],RANK_ORDER[hole_cards[1].rank])
         hole_paired = hole_cards[0].rank == hole_cards[1].rank
         hole_flush_draw = has_flush_draw(hole_cards=hole_cards, community_cards=community_cards)
         open_straight_draws, gutshot_straight_draws = count_straight_draws(hole_cards=hole_cards, community_cards=community_cards)
@@ -632,7 +633,8 @@ class ASTAgent(BaseAgent):
             board_smallest_3_card_span,
 
             hole_suited,
-            hole_highest_card,
+            hole_high_card,
+            hole_low_card,
             hole_paired,
             hole_flush_draw,
             hole_open_straight_draw,
@@ -654,8 +656,6 @@ class ASTAgent(BaseAgent):
             historical_stats['CBET%'],
             historical_stats['DONK%'],
             historical_stats['CHECKRAISE%'],
-
         )
         bet = action * pot_size
-
         return bet

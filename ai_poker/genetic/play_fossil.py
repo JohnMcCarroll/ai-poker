@@ -63,38 +63,12 @@ class HumanAgent(BaseAgent):
     def act(self, obs: clubs.poker.engine.ObservationDict) -> int:
         call_amount = obs.get('call', 0)
         min_raise = obs.get('min_raise', call_amount * 2)
-        max_raise = obs.get('max_raise', 1000) # Max chips available (stack)
 
         while True:
             try:
                 # Prompt the user
                 user_input = input(f"\nEnter your total bet amount (Call={call_amount}, Min Raise={min_raise}): ")
-                # user_input = input(f"\nEnter your bet: ")
                 bet = int(user_input.strip())
-                
-                # # V1: Check non-negative
-                # if bet < 0:
-                #     print("Error: Bet amount cannot be negative.")
-                #     continue
-                
-                # # V2: Check within stack limit
-                # if bet > max_raise:
-                #     print(f"Error: Bet amount ({bet}) exceeds your maximum stack ({max_raise}).")
-                #     continue
-
-                # # V3: Check Call/Check/Fold Logic (simplified)
-                # if bet < call_amount and call_amount > 0 and bet != 0:
-                #     # In a simplified model, if you don't bet at least the call amount, it's an illegal under-bet.
-                #     print(f"Error: You must bet at least the required call amount ({call_amount}) to continue in the hand.")
-                #     continue
-                
-                # # V4: Check Minimum Raise Logic
-                # if bet > call_amount and bet < min_raise:
-                #     # If the user raises (bet > call_amount), it must meet the min_raise threshold.
-                #     print(f"Error: If you raise, the total bet must be at least the minimum raise amount: {min_raise}")
-                #     continue
-                    
-                # If all checks pass, return the valid bet
                 return bet
 
             except ValueError:
@@ -105,20 +79,16 @@ class HumanAgent(BaseAgent):
 
 if __name__ == '__main__':
     # Load fossil
-    # file_name = '/home/john/personal_project/ai-poker/ai_poker/genetic\\fossils\\fossils_v1.1_gen125_2025-11-09_13-59-55.pkl'
     file_name = "/home/john/personal_project/ai-poker/ai_poker/genetic/fossils/evo_ckpt_v1.3_gen130_2025-11-13_09-41-10.pkl"
-    # FOSSILS_DIR = os.path.dirname(__file__) + "\\fossils\\"
-    # with open(FOSSILS_DIR + file_name, 'rb') as f:
+    generation_index = None
+
     with open(file_name, 'rb') as f:
         fossil_record = pickle.load(f)
-        # print(type(fossil_record['fossil_record']))
-        
         fossil_record = fossil_record['fossil_record']
-        index = max(fossil_record.keys())
+        if generation_index is None:
+            generation_index = max(fossil_record.keys())
 
-    # latest_ast = list(fossil_record.values())[-1]['individual']
-    print(fossil_record[index].keys())
-    latest_ast = fossil_record[index]['individual']
+    latest_ast = fossil_record[generation_index]['individual']
     
     deap_ind = creator.Individual(latest_ast)
     ast_code = toolbox.compile(expr=deap_ind)
@@ -146,7 +116,6 @@ if __name__ == '__main__':
     viz = HumanCommandLineViewer(env.dealer, num_players=2)
     viz.update()
     viz.display()
-    # time.sleep(3)
 
     done = [False]
     game_over = False
@@ -174,7 +143,6 @@ if __name__ == '__main__':
             time.sleep(5)
             viz.update()
             viz.display()
-
 
     # detect and declare winner of heads up match
     print("\n--- GAME OVER ---")

@@ -22,24 +22,25 @@ ARGUMENT_TYPES = [
     str,        # hand_class (e.g., 'PAIR', 'FLUSH')
     str,        # street (e.g., 'PREFLOP', 'FLOP')
 
-    float,        # 'board_highest_card',
-    float,        # 'board_num_pairs',
-    float,        # 'board_num_trips', 
-    float,        # 'board_num_quads',
-    float,        # 'board_num_same_suits',
-    float,        # 'board_smallest_3_card_span',
+    float,      # 'board_highest_card',
+    float,      # 'board_num_pairs',
+    float,      # 'board_num_trips', 
+    float,      # 'board_num_quads',
+    float,      # 'board_num_same_suits',
+    float,      # 'board_smallest_3_card_span',
 
-    bool,        # 'hole_suited',
-    float,        # 'hole_highest_card',
-    bool,        # 'hole_paired',
-    bool,        # 'hole_flush_draw',
-    bool,        # 'hole_open_straight_draw',
-    bool,        # 'hole_gutshot_straight_draw'
+    bool,       # 'hole_suited',
+    float,      # 'hole_high_card',
+    float,      # 'hole_low_card',
+    bool,       # 'hole_paired',
+    bool,       # 'hole_flush_draw',
+    bool,       # 'hole_open_straight_draw',
+    bool,       # 'hole_gutshot_straight_draw'
 
     str,        # 'preflop_opponent_line'
-    str,         # 'flop_opponent_line'
-    str,         # 'turn_opponent_line'
-    str,         # 'river_opponent_line'
+    str,        # 'flop_opponent_line'
+    str,        # 'turn_opponent_line'
+    str,        # 'river_opponent_line'
 
     float,      # num_hands
     float,      # VPIP
@@ -72,9 +73,9 @@ HAND_STRENGTH_MAP = {i: strength for i, strength in enumerate(np.linspace(0, 1, 
 STREET_MAP = {0: 'PREFLOP', 1: 'FLOP', 2: 'TURN', 3: 'RIVER'}
 
 # algorithm parameters constants
-INITIAL_MAX_TREE_HEIGHT = 10
-INITIAL_MIN_TREE_HEIGHT = 3
-MAX_NODE_COUNT = 20000
+INITIAL_MAX_TREE_HEIGHT = 9
+INITIAL_MIN_TREE_HEIGHT = 2
+MAX_NODE_COUNT = 10000
 ELITE_PCT = 0.05
 IMMIGRATION_PCT = 0.05
 # mutation, prune, and crossover probabilities should add up to 1.0
@@ -82,11 +83,10 @@ PROB_CROSSOVER = 0.80
 PROB_MUTATION = 0.10
 PROB_PRUNE = 0.10
 POP_SIZE = 500
-# POP_SIZE = 50
 N_GEN = 10000
-MAX_HANDS = 400
+MAX_HANDS = 200
 MIN_HANDS = 100
-HAND_NUM_STEP_SIZE = 25
+HAND_NUM_STEP_SIZE = 10
 GEN_CURRICULUM_STEP_SIZE = 200
 EVALUATION_BENCH_SIZE = 50
 WIN_RATE_FITNESS_WEIGHT = 1.0
