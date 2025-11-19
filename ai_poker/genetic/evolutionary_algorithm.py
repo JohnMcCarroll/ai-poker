@@ -358,6 +358,7 @@ logbook = tools.Logbook()
 def main():
     ckpt_dict = {}
     if RESTART_FROM_CKPT:
+        print(f'Restarting from {RESTART_FROM_CKPT}')
         with open(RESTART_FROM_CKPT, 'rb') as ckpt_file:
             ckpt_dict = pickle.load(ckpt_file)
 
@@ -379,7 +380,7 @@ def main():
     num_static_bots = len(static_bench)
     multiplier = EVALUATION_BENCH_SIZE // num_static_bots
     full_bench = ckpt_dict.get('bench', static_bench*multiplier) # populate eval bench with static bots
-    bench_names = [str(i) for i in full_bench]
+    bench_names = ckpt_dict.get('bench_names', [str(i) for i in full_bench])
     bench_tenures = ckpt_dict.get('bench_tenures', [0 for _ in full_bench])
     starting_gen = ckpt_dict.get('generation', -1) + 1
     
@@ -647,6 +648,7 @@ def main():
                 "fossil_record": fossil_record,
                 "bench": full_bench,
                 "bench_tenures": bench_tenures,
+                "bench_names": bench_names,
                 "population": pop,
                 "generation": gen,
             }
