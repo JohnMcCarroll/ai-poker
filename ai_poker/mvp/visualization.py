@@ -19,7 +19,8 @@ class CommandLineViewer:
             'hole_cards': [[] for _ in range(num_players)], 
             'community_cards': [],
             'acting_player': 0,
-            'hand_result': None
+            'hand_result': None,
+            'button': None,
         }
         # Attempt to pull initial state from dealer
         self._update_dealer_info()
@@ -44,6 +45,9 @@ class CommandLineViewer:
 
             # Active players list (e.g., [False, True] means Player 2 is acting)
             self.current_state['acting_player'] = getattr(self.dealer, 'action', self.current_state['acting_player'])
+
+            # Get dealer button position
+            self.current_state['button'] = getattr(self.dealer, 'button', self.current_state['button'])
             
         except AttributeError as e:
             print(f"ERROR: Dealer object is missing an expected attribute: {e}. Check dealer structure.")

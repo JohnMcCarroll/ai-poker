@@ -1,4 +1,3 @@
-import time
 from ai_poker.mvp.poker_env import PokerEnv
 from ai_poker.mvp.visualization import CommandLineViewer
 from ai_poker.genetic.AST_agent import ASTAgent
@@ -24,6 +23,8 @@ class HumanCommandLineViewer(CommandLineViewer):
         print("-"*70)
         
         # Player Data
+        dealer_pos = self.current_state.get('button', -1) # Get the dealer button position
+
         for i in range(self.num_players):
             # Hole cards are retrieved from the persistent state
             hole_cards = self._format_cards(self.current_state['hole_cards'][i])
@@ -33,9 +34,17 @@ class HumanCommandLineViewer(CommandLineViewer):
             bet = self.current_state['bets'][i] if i < len(self.current_state['bets']) else 0.0
             is_active = self.current_state['acting_player'] == i
             
-            active_marker = " <--- ACTING" if is_active else ""
+            # --- MODIFICATION: Build player status string ---
+            status_markers = []
+            if i == dealer_pos:
+                status_markers.append("(D)") # Add Dealer Button Icon
+            if is_active:
+                status_markers.append("<--- ACTING")
+                
+            active_marker = " ".join(status_markers)
+            # --- END MODIFICATION ---
 
-            print(f"PLAYER {i + 1}{active_marker}")
+            print(f"PLAYER {i + 1} {active_marker}") # Display markers
             print(f"  Stack:      ${stack:,.2f}")
             print(f"  Commitment: ${bet:,.2f} (This Betting Street)")
             if i == 0:
@@ -79,7 +88,7 @@ class HumanAgent(BaseAgent):
 
 if __name__ == '__main__':
     # Load fossil
-    file_name = "/home/john/personal_project/ai-poker/ai_poker/genetic/fossils/evo_ckpt_v1.3_gen130_2025-11-13_09-41-10.pkl"
+    file_name = "G:\\poker_bot\\ai-poker\\ai_poker\\genetic\\fossils\\evo_ckpt_v1.4_gen3_2025-11-19_18-58-00.pkl"
     generation_index = None
 
     with open(file_name, 'rb') as f:
@@ -140,7 +149,12 @@ if __name__ == '__main__':
 
         if all(done):
             obs = env.reset()
-            time.sleep(5)
+            
+            # --- MODIFICATION: Replace time.sleep with input() ---
+            # time.sleep(5)
+            input("\nHand complete. Press Enter to start the next hand...")
+            # --- END MODIFICATION ---
+            
             viz.update()
             viz.display()
 
