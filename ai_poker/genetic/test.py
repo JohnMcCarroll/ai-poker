@@ -3,9 +3,16 @@ from ai_poker.mvp.poker_env import PokerEnv
 from ai_poker.mvp.visualization import CommandLineViewer
 from ai_poker.mvp.agents import RandomAgent, RandomAgent2
 from ai_poker.genetic.simple_agents import ManiacAgent, StationAgent, SimpleValueAgent
+import random
+
 
 
 if __name__ == '__main__':
+
+    seed = 4
+    random.seed(seed)
+    # np.random.seed(seed)
+
     # Instantiate heads up poker env
     env = PokerEnv(
         num_players=2,
@@ -23,7 +30,7 @@ if __name__ == '__main__':
         start_stack=500,
         low_end_straight=True
     )
-    env.register_agents([StationAgent(), SimpleValueAgent(dealer=env.dealer, position=1)])
+    env.register_agents([StationAgent(), SimpleValueAgent(dealer=env.dealer, seat_id=1)])
     obs = env.reset()
     viz = CommandLineViewer(env.dealer, num_players=2)
     viz.update()

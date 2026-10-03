@@ -87,7 +87,7 @@ def run_evaluation(task):
     Wrapper function to run a single evaluation match in a worker process.
     """
     # Unpack the task
-    agent1_tree, agent2_tree, max_hands, i, j = task
+    agent1_tree, agent2_tree, max_hands, i, j, seed = task
 
     def compile_agent(agent_tree_or_class):
         """Helper to compile a DEAP tree or return a class."""
@@ -111,7 +111,7 @@ def run_evaluation(task):
         agent2_logic = compile_agent(agent2_tree)
         
         # 3. Run the evaluation
-        w1, w2, n_hands = toolbox.evaluate(agent1_logic, agent2_logic, max_hands=max_hands)
+        w1, w2, n_hands = toolbox.evaluate(agent1_logic, agent2_logic, max_hands=max_hands, seed=seed)
         
         # 4. Return results with indices to map back
         return (i, j, w1, w2, n_hands)
@@ -123,11 +123,13 @@ def run_evaluation(task):
             print(f"Error evaluating task ({i} vs {j}): {e}", file=log_file)
         return (i, j, 0, 0, 1) # Return 0 winnings, 1 hand (to avoid divide-by-zero)
 
-def evaluate_agents(agent1_logic, agent2_logic, max_hands=500):
+def evaluate_agents(agent1_logic, agent2_logic, max_hands=500, seed=SEED):
     """
     Simulates a heads-up poker match between two compiled agents.
     Returns the final winnings for each agent.
     """
+
+    random.seed(seed)    
     
     winnings = [0.0, 0.0]
     num_hands = 0
@@ -397,7 +399,7 @@ def main():
             for j, opponent in enumerate(full_bench):
                 # We send the raw tree (pop[i]) and the opponent (class or tree)
                 # We use 'None' as the 'j' index to mark it as a bench match
-                tasks.append((pop[i], opponent, num_hands, i, j))
+                tasks.append((pop[i], opponent, num_hands, i, j, SEED+gen))
         
         # # --- 2. Run all tasks in parallel ---
         async_results = []
