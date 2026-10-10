@@ -10,7 +10,7 @@ import numpy as np
 from deap import base, creator, tools, gp
 import matplotlib.pyplot as plt
 from ai_poker.mvp.poker_env import PokerEnv
-from ai_poker.genetic.simple_agents import StationAgent, SimpleValueAgent
+from ai_poker.genetic.simple_agents import StationAgent, SimpleValueAgent, RandomAgent
 import random
 import os
 import pickle
@@ -53,6 +53,7 @@ from ai_poker.genetic.constants import (
     EVALUATION_TIMEOUT,
     RESTART_FROM_CKPT
 )
+from sklearn.cluster import KMeans
 
 
 # DEFINE HELPER FUNCTIONS
@@ -111,17 +112,17 @@ def run_evaluation(task):
         agent2_logic = compile_agent(agent2_tree)
         
         # 3. Run the evaluation
-        w1, w2, n_hands = toolbox.evaluate(agent1_logic, agent2_logic, max_hands=max_hands, seed=seed)
+        w1, w2, n_hands, stats = toolbox.evaluate(agent1_logic, agent2_logic, max_hands=max_hands, seed=seed)
         
         # 4. Return results with indices to map back
-        return (i, j, w1, w2, n_hands)
+        return (i, j, w1, w2, n_hands, stats)
         
     except Exception as e:
         # Catch errors from bad individuals
         print(f"Error evaluating task ({i} vs {j}): {e}")
         if LOG:
             print(f"Error evaluating task ({i} vs {j}): {e}", file=log_file)
-        return (i, j, 0, 0, 1) # Return 0 winnings, 1 hand (to avoid divide-by-zero)
+        return (i, j, 0, 0, 1, {}) # Return 0 winnings, 1 hand (to avoid divide-by-zero)
 
 def evaluate_agents(agent1_logic, agent2_logic, max_hands=500, seed=SEED):
     """
@@ -188,14 +189,41 @@ def evaluate_agents(agent1_logic, agent2_logic, max_hands=500, seed=SEED):
             if isinstance(player2, ASTAgent):
                 player2.hand_complete(env.dealer.history, rewards)
             
-            if game_over:
-                # reset stacks and deal next hand
-                obs = env.reset(reset_stacks=True)
-            else:
-                # deal next hand
-                obs = env.reset()
+            # if game_over:
+            #     # reset stacks and deal next hand
+            #     obs = env.reset(reset_stacks=True)
+            # else:
+            #     # deal next hand
+            #     obs = env.reset()
 
-    return winnings[0], winnings[1], num_hands
+            # TEST: reset stacks every hand for more consistent evaluation
+            obs = env.reset(reset_stacks=True)
+
+
+    # Extract behavioral profile of player 2 (the bench agent) tracked by player 1 (or vice versa)
+    # ASTAgent tracks stats of its opponent. Since player 1 tracked player 2, 
+    # player1.get_opponent_stats() gives player 2's behavior.
+    stats = {'1': [0.3, 0.15, 1.0]} # Default fallbacks
+    if isinstance(player1, ASTAgent):
+        p2_stats = player1.opponent_stats
+        bench_features1 = [
+            p2_stats.get('VPIP', 0.3),
+            p2_stats.get('PFR', 0.15),
+            p2_stats.get('AF', 1.0)
+        ]
+        stats['2'] = p2_stats
+    if isinstance(player2, ASTAgent):
+        # Fallback if player 2 tracked player 1 instead
+        p1_stats = player2.opponent_stats
+        bench_features2 = [
+            p1_stats.get('VPIP', 0.3),
+            p1_stats.get('PFR', 0.15),
+            p1_stats.get('AF', 1.0)
+        ]
+        stats['1'] = p1_stats
+
+    return winnings[0], winnings[1], num_hands, stats
+
 
 def uniform_prune(individual, max_size):
     """
@@ -378,7 +406,7 @@ def main():
 
     # Create bench
     # --- Task Group: Benchmark (Pop vs. Bench) ---
-    static_bench = [SimpleValueAgent, StationAgent]
+    static_bench = [SimpleValueAgent, StationAgent, RandomAgent]
     num_static_bots = len(static_bench)
     multiplier = EVALUATION_BENCH_SIZE // num_static_bots
     full_bench = ckpt_dict.get('bench', static_bench*multiplier) # populate eval bench with static bots
@@ -386,6 +414,10 @@ def main():
     bench_tenures = ckpt_dict.get('bench_tenures', [0 for _ in full_bench])
     starting_gen = ckpt_dict.get('generation', -1) + 1
     
+    bench_winnings_map = {i: 0 for i in range(len(full_bench))}
+    bench_num_hands_map = {i: 0 for i in range(len(full_bench))}
+    bench_stats_map = {i: {} for i in range(len(full_bench))}
+
     for gen in range(starting_gen, N_GEN):        
         # --- 1. Prepare all evaluation tasks ---
         tasks = []
@@ -411,9 +443,6 @@ def main():
         # # --- 3. Process results ---
         winnings_map = {i: 0 for i in range(len(pop))}
         num_hands_map = {i: 0 for i in range(len(pop))}
-        
-        bench_winnings_map = {i: 0 for i in range(len(full_bench))}
-        bench_num_hands_map = {i: 0 for i in range(len(full_bench))}
 
         for i, res in enumerate(async_results):
             try:
@@ -421,16 +450,22 @@ def main():
                 result = res.get(timeout=EVALUATION_TIMEOUT) 
                 # Process result...
                 # This loop receives results as soon as a worker finishes one task
-                i, j, w1, w2, n_hands = result
+                i, j, w1, w2, n_hands, statistics = result
                 
                 # Update scores for individual i
                 winnings_map[i] += w1
                 num_hands_map[i] += n_hands
                 
                 # Update scores for bench players
-                if j is not None:
+                if j is not None and getattr(pop[i], "lineage", "Elite") == 'Elite':
                     bench_winnings_map[j] += w2
                     bench_num_hands_map[j] += n_hands
+                    for stat in statistics['2'].keys():
+                        if stat in bench_stats_map[j].keys():
+                            bench_stats_map[j][stat] += statistics['2'][stat]
+                        else:
+                            bench_stats_map[j][stat] = statistics['2'][stat]
+
             except multiprocessing.TimeoutError:
                 # Handle the hung worker and continue
                 print("Worker timed out!")
@@ -473,6 +508,7 @@ def main():
         bench_win_rate_map = {i: {'win_rate': 0.0, 'opponent': "None"} for i in range(len(full_bench))}
         highest_win_rate = {'win_rate': -math.inf, 'opponent_name': "None", 'opponent_index': 0}
         lowest_win_rate = {'win_rate': math.inf, 'opponent_name': "None", 'opponent_index': 0}
+        print('num_bench_eval_hands: ' + str(bench_num_hands_map[0]))
         for i, ind in enumerate(full_bench):
             if bench_num_hands_map[i] > 0:
                 win_rate = 50 * bench_winnings_map[i] / bench_num_hands_map[i]
@@ -517,12 +553,91 @@ def main():
             'gen': gen
         }
 
-        # update bench (lowest winner gets replaced)
-        full_bench[lowest_win_rate['opponent_index']] = best_ind
-        bench_names[lowest_win_rate['opponent_index']] = f'Fossil Gen {gen}'
+
+
+# --- Inside main() after evaluation tasks complete ---
+        
+        # Gather behavioral features for all bench players
+        bench_features_list = []
+        for i in range(len(full_bench)):
+            # Fallback or collected features from evaluation tasks
+            bench_stats = bench_stats_map.get(i, [0.3, 0.15, 1.0])
+            def safe_div(num, den):
+                return (num / den) if den > 0 else 0.0
+            
+        
+            num_hands = bench_stats['num_hands']
+            features = [
+                safe_div(bench_stats['vpip_hands'], bench_stats['num_hands']), #                    'VPIP': 
+                safe_div(bench_stats['pfr_hands'], bench_stats['num_hands']), #                     'PFR': 
+                safe_div(bench_stats['3bet_hands'], bench_stats['3bet_opportunities']), #           '3BET': 
+                safe_div(bench_stats['wtsd_hands'], bench_stats['num_hands']), #                    'WTSD': 
+                safe_div(bench_stats['wtsd_win_hands'], bench_stats.get('wtsd_hands', 0)), #        Use .get for safety # 'W$SD': 
+                safe_div(bench_stats['wwsf_hands'], bench_stats['saw_flop_hands']), #               'WWSF': 
+                safe_div(bench_stats['agg_bets'] + bench_stats['agg_raises'], bench_stats['agg_calls']), # 'AF': 
+                safe_div(bench_stats['cbet_hands'], bench_stats['cbet_opportunities']), #           'CBET%': 
+                safe_div(bench_stats['donk_hands'], bench_stats['donk_opportunities']), #           'DONK%': 
+                safe_div(bench_stats['checkraise_hands'], bench_stats['checkraise_opportunities']), # 'CHECKRAISE%': 
+            ]
+            
+
+            bench_features_list.append(features)
+
+        # Apply K-Means Clustering (k = 3) to maintain diverse archetypes
+        k_clusters = min(3, len(full_bench))
+        if len(full_bench) >= k_clusters:
+            kmeans = KMeans(n_clusters=k_clusters, random_state=gen, n_init=10)
+            cluster_labels = kmeans.fit_predict(bench_features_list)
+        else:
+            cluster_labels = [0] * len(full_bench)
+
+        # Count how many bench members belong to each cluster to identify overrepresented archetypes
+        cluster_counts = {}
+        for label in cluster_labels:
+            cluster_counts[label] = cluster_counts.get(label, 0) + 1
+
+        # Update bench: Prefer replacing the worst performer from the densest cluster 
+        # to encourage diversity, while keeping top performers.
         for i, _ in enumerate(bench_tenures):
             bench_tenures[i] += 1
-        bench_tenures[lowest_win_rate['opponent_index']] = 0
+
+        update_bench_period = 5
+        if gen % update_bench_period == 0:
+            # Find candidate bench slot to replace:
+            # Weight lowest win rate with cluster density penalty so crowded clusters get replaced first
+            replacement_candidates = sorted(
+                range(len(full_bench)),
+                key=lambda idx: (
+                    -cluster_counts[cluster_labels[idx]],  # Prefer replacing from crowded clusters
+                    bench_win_rate_map[idx]['win_rate']    # Secondary: lowest win rate overall
+                )
+            )
+            target_idx = replacement_candidates[0]
+
+            full_bench[target_idx] = best_ind
+            bench_names[target_idx] = f'Fossil Gen {gen} (Cluster {cluster_labels[target_idx]})'
+            bench_tenures[target_idx] = 0
+
+            bench_winnings_map = {i: 0 for i in range(len(full_bench))}
+            bench_num_hands_map = {i: 0 for i in range(len(full_bench))}
+            bench_stats_map[target_idx] = {}
+
+            # if VERBOSE:
+            #     print(f"Bench update: Replaced slot {target_idx} with Gen {gen} elite (Cluster {cluster_labels[target_idx]})")
+
+
+
+        # # update bench (lowest winner gets replaced)
+        # for i, _ in enumerate(bench_tenures):
+        #     bench_tenures[i] += 1
+        # update_bench_period = 5
+        # if gen % update_bench_period == 0:
+        #     full_bench[lowest_win_rate['opponent_index']] = best_ind
+        #     bench_names[lowest_win_rate['opponent_index']] = f'Fossil Gen {gen}'
+        #     bench_tenures[lowest_win_rate['opponent_index']] = 0
+
+        #     bench_winnings_map = {i: 0 for i in range(len(full_bench))}
+        #     bench_num_hands_map = {i: 0 for i in range(len(full_bench))}
 
         print(bench_tenures)
         if LOG:
