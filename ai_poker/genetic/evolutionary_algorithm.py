@@ -10,7 +10,7 @@ import numpy as np
 from deap import base, creator, tools, gp
 import matplotlib.pyplot as plt
 from ai_poker.mvp.poker_env import PokerEnv
-from ai_poker.genetic.simple_agents import StationAgent, SimpleValueAgent, RandomAgent
+from ai_poker.genetic.simple_agents import StationAgent, SimpleValueAgent, ManiacAgent
 import random
 import os
 import pickle
@@ -406,7 +406,7 @@ def main():
 
     # Create bench
     # --- Task Group: Benchmark (Pop vs. Bench) ---
-    static_bench = [SimpleValueAgent, StationAgent, RandomAgent]
+    static_bench = [SimpleValueAgent, StationAgent, ManiacAgent]
     num_static_bots = len(static_bench)
     multiplier = EVALUATION_BENCH_SIZE // num_static_bots
     full_bench = ckpt_dict.get('bench', static_bench*multiplier) # populate eval bench with static bots
