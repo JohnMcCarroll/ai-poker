@@ -88,8 +88,8 @@ class HumanAgent(BaseAgent):
 
 if __name__ == '__main__':
     # Load fossil
-    file_name = "G:\\poker_bot\\ai-poker\\ai_poker\\genetic\\fossils\\evo_ckpt_v1.4_gen3_2025-11-19_18-58-00.pkl"
-    generation_index = None
+    file_name = r"/home/john/projects/poker_ai/ai-poker/ai_poker/genetic\fossils\evo_ckpt_v1.4_gen890_2026-10-07_22-30-56.pkl"
+    generation_index = 800
 
     with open(file_name, 'rb') as f:
         fossil_record = pickle.load(f)

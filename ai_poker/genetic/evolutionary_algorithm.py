@@ -508,7 +508,7 @@ def main():
         bench_win_rate_map = {i: {'win_rate': 0.0, 'opponent': "None"} for i in range(len(full_bench))}
         highest_win_rate = {'win_rate': -math.inf, 'opponent_name': "None", 'opponent_index': 0}
         lowest_win_rate = {'win_rate': math.inf, 'opponent_name': "None", 'opponent_index': 0}
-        print('num_bench_eval_hands: ' + str(bench_num_hands_map[0]))
+        # print('num_bench_eval_hands: ' + str(bench_num_hands_map[0]))
         for i, ind in enumerate(full_bench):
             if bench_num_hands_map[i] > 0:
                 win_rate = 50 * bench_winnings_map[i] / bench_num_hands_map[i]
@@ -555,7 +555,7 @@ def main():
 
 
 
-# --- Inside main() after evaluation tasks complete ---
+        # --- Inside main() after evaluation tasks complete ---
         
         # Gather behavioral features for all bench players
         bench_features_list = []
@@ -568,33 +568,59 @@ def main():
         
             num_hands = bench_stats['num_hands']
             features = [
-                safe_div(bench_stats['vpip_hands'], bench_stats['num_hands']), #                    'VPIP': 
-                safe_div(bench_stats['pfr_hands'], bench_stats['num_hands']), #                     'PFR': 
-                safe_div(bench_stats['3bet_hands'], bench_stats['3bet_opportunities']), #           '3BET': 
-                safe_div(bench_stats['wtsd_hands'], bench_stats['num_hands']), #                    'WTSD': 
-                safe_div(bench_stats['wtsd_win_hands'], bench_stats.get('wtsd_hands', 0)), #        Use .get for safety # 'W$SD': 
-                safe_div(bench_stats['wwsf_hands'], bench_stats['saw_flop_hands']), #               'WWSF': 
-                safe_div(bench_stats['agg_bets'] + bench_stats['agg_raises'], bench_stats['agg_calls']), # 'AF': 
-                safe_div(bench_stats['cbet_hands'], bench_stats['cbet_opportunities']), #           'CBET%': 
-                safe_div(bench_stats['donk_hands'], bench_stats['donk_opportunities']), #           'DONK%': 
-                safe_div(bench_stats['checkraise_hands'], bench_stats['checkraise_opportunities']), # 'CHECKRAISE%': 
+                safe_div(bench_stats['vpip_hands'], bench_stats['num_hands']), #                            'VPIP': 
+                safe_div(bench_stats['pfr_hands'], bench_stats['num_hands']), #                             'PFR': 
+                safe_div(bench_stats['3bet_hands'], bench_stats['3bet_opportunities']), #                   '3BET': 
+                safe_div(bench_stats['wtsd_hands'], bench_stats['num_hands']), #                            'WTSD': 
+                safe_div(bench_stats['wtsd_win_hands'], bench_stats.get('wtsd_hands', 0)), #                'W$SD': 
+                safe_div(bench_stats['wwsf_hands'], bench_stats['saw_flop_hands']), #                       'WWSF': 
+                safe_div(bench_stats['agg_bets'] + bench_stats['agg_raises'], bench_stats['agg_calls']), #  'AF': 
+                safe_div(bench_stats['cbet_hands'], bench_stats['cbet_opportunities']), #                   'CBET%': 
+                safe_div(bench_stats['donk_hands'], bench_stats['donk_opportunities']), #                   'DONK%': 
+                safe_div(bench_stats['checkraise_hands'], bench_stats['checkraise_opportunities']), #       'CHECKRAISE%': 
             ]
             
 
             bench_features_list.append(features)
 
-        # Apply K-Means Clustering (k = 3) to maintain diverse archetypes
-        k_clusters = min(3, len(full_bench))
-        if len(full_bench) >= k_clusters:
-            kmeans = KMeans(n_clusters=k_clusters, random_state=gen, n_init=10)
-            cluster_labels = kmeans.fit_predict(bench_features_list)
-        else:
-            cluster_labels = [0] * len(full_bench)
+        # # Apply K-Means Clustering (k = 3) to maintain diverse archetypes
+        # k_clusters = min(3, len(full_bench))
+        # if len(full_bench) >= k_clusters:
+        #     kmeans = KMeans(n_clusters=k_clusters, random_state=gen, n_init=10)
+        #     cluster_labels = kmeans.fit_predict(bench_features_list)
+        # else:
+        #     cluster_labels = [0] * len(full_bench)
 
-        # Count how many bench members belong to each cluster to identify overrepresented archetypes
-        cluster_counts = {}
-        for label in cluster_labels:
-            cluster_counts[label] = cluster_counts.get(label, 0) + 1
+        # # Count how many bench members belong to each cluster to identify overrepresented archetypes
+        # cluster_counts = {}
+        # for label in cluster_labels:
+        #     cluster_counts[label] = cluster_counts.get(label, 0) + 1
+
+        # print(cluster_counts)
+
+        #### bias towards behavioral differences. remove most similar, least winning bench player
+        bench_features_vector = np.array(bench_features_list, dtype=float)
+        # Compute pairwise Euclidean (L2) distances efficiently using broadcasting:
+        # X_scaled[:, np.newaxis, :] has shape (N, 1, D)
+        # X_scaled[np.newaxis, :, :] has shape (1, N, D)
+        # The difference results in an (N, N, D) tensor of pairwise feature deltas.
+        diff = bench_features_vector[:, np.newaxis, :] - bench_features_vector[np.newaxis, :, :]
+        
+        # Take the L2 norm across the feature dimension (axis=2) to get the (N, N) distance matrix
+        distance_matrix = np.linalg.norm(diff, axis=2)
+        
+        # Sum the distances across rows (excluding self-distance on the diagonal which is 0)
+        total_l2_distances = np.sum(distance_matrix, axis=1)
+
+        feature_dist_range = total_l2_distances.max() - total_l2_distances.min()
+        dist_min = total_l2_distances.min()
+
+
+        # print(total_l2_distances)
+        # print(max_dist)
+
+
+
 
         # Update bench: Prefer replacing the worst performer from the densest cluster 
         # to encourage diversity, while keeping top performers.
@@ -603,19 +629,45 @@ def main():
 
         update_bench_period = 5
         if gen % update_bench_period == 0:
+            # # let's bias towards diversity, but leave some room for removing terrible strategies
+            # win_rate_range = abs(highest_win_rate['win_rate'] - lowest_win_rate['win_rate'])
+            # # max_cluster_count = max(cluster_counts.values())
+            # # weight_cluster = 1.0
+            # weight_win_rate = 0.125
+
+            # # Find candidate bench slot to replace:
+            # # Weight lowest win rate with cluster density penalty so crowded clusters get replaced first
+            # replacement_candidates = sorted(
+            #     range(len(full_bench)),
+            #     key=lambda idx: (
+            #         # Prefer replacing from crowded clusters
+            #         # Secondary: lowest win rate overall
+            #         weight_cluster*(-cluster_counts[cluster_labels[idx]] / max_cluster_count) + weight_win_rate*(bench_win_rate_map[idx]['win_rate'] / win_rate_range)    
+            #     )
+            # )
+
+            # let's bias towards diversity, but leave some room for removing terrible strategies
+            win_rate_range = abs(highest_win_rate['win_rate'] - lowest_win_rate['win_rate'])
+
+            # max_cluster_count = max(cluster_counts.values())
+            dist_weight = 1.0
+            weight_win_rate = 0.5     # TODO: Massive unknown = optimal weight. .5? .1?
+
             # Find candidate bench slot to replace:
             # Weight lowest win rate with cluster density penalty so crowded clusters get replaced first
             replacement_candidates = sorted(
                 range(len(full_bench)),
                 key=lambda idx: (
-                    -cluster_counts[cluster_labels[idx]],  # Prefer replacing from crowded clusters
-                    bench_win_rate_map[idx]['win_rate']    # Secondary: lowest win rate overall
+                    # Prefer replacing from crowded clusters
+                    # Secondary: lowest win rate overall
+                    dist_weight*((total_l2_distances[idx] - dist_min) / feature_dist_range) + weight_win_rate*((bench_win_rate_map[idx]['win_rate'] - lowest_win_rate['win_rate']) / win_rate_range)    
                 )
             )
+
             target_idx = replacement_candidates[0]
 
             full_bench[target_idx] = best_ind
-            bench_names[target_idx] = f'Fossil Gen {gen} (Cluster {cluster_labels[target_idx]})'
+            bench_names[target_idx] = f'Fossil Gen {gen}'# (Cluster {cluster_labels[target_idx]})'
             bench_tenures[target_idx] = 0
 
             bench_winnings_map = {i: 0 for i in range(len(full_bench))}
@@ -623,7 +675,7 @@ def main():
             bench_stats_map[target_idx] = {}
 
             # if VERBOSE:
-            #     print(f"Bench update: Replaced slot {target_idx} with Gen {gen} elite (Cluster {cluster_labels[target_idx]})")
+            #     print(f"Bench update: Replaced slot {target_idx} with Gen {gen} elite (score {cluster_labels[target_idx]})")
 
 
 
