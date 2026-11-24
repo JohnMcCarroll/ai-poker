@@ -1,6 +1,7 @@
+import os
 import random
 from collections import deque
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -91,21 +92,17 @@ def action_index_to_chipzen(action_idx: int, state: GameState, action_dim: int =
             return Action.check()
         return Action.fold()
 
-    # Action 0: Fold when facing a bet; otherwise check/call passively
     if action_idx <= 0:
         if to_call > 0 and "fold" in valid:
             return Action.fold()
         return passive_action()
 
-    # Action 1: Call / check
     if action_idx == 1:
         return passive_action()
 
-    # Action 2+: Raise / bet sizing tiers
     if can_raise:
         if action_idx == 2 or action_dim <= 3:
             return _make_raise_action(min_raise, min_raise, max_raise)
-        # Larger raise sizing for higher action indices
         target = min_raise + max(0, pot // 2)
         return _make_raise_action(target, min_raise, max_raise)
 
@@ -144,6 +141,19 @@ class ConfigurablePokerNet(nn.Module):
         return self.network(x)
 
 
+def load_poker_net(checkpoint_path: str, map_location: str = "cpu") -> Tuple[ConfigurablePokerNet, Dict[str, Any]]:
+    """Load a saved ConfigurablePokerNet checkpoint and metadata."""
+    checkpoint = torch.load(checkpoint_path, map_location=map_location)
+    model = ConfigurablePokerNet(
+        input_dim=checkpoint["state_dim"],
+        output_dim=checkpoint["action_dim"],
+        hidden_dims=checkpoint.get("hidden_dims", [128, 128]),
+    )
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
+    return model, checkpoint
+
+
 class ChipzenDQNBot(Bot):
     """Chipzen Bot backed by a ConfigurablePokerNet Q-network."""
 
@@ -163,7 +173,7 @@ class ChipzenDQNBot(Bot):
         self.last_state_vec: Optional[np.ndarray] = None
         self.last_action_idx: Optional[int] = None
 
-    def decide_with_index(self, state: GameState) -> tuple[Action, int]:
+    def decide_with_index(self, state: GameState) -> Tuple[Action, int]:
         state_vec = game_state_to_features(state, self.state_dim)
         if self.use_epsilon and random.random() < self.epsilon:
             action_idx = random.randint(0, self.action_dim - 1)
@@ -188,7 +198,7 @@ class ChipzenDQNBot(Bot):
 
 
 class PokerSelfPlayTrainer:
-    """Manages self-play training over ChipzenPokerEnv with replay and target snapshots."""
+    """Manages self-play training over ChipzenPokerEnv with replay, logging, and checkpoints."""
 
     def __init__(
         self,
@@ -211,12 +221,22 @@ class PokerSelfPlayTrainer:
         self.opponent_pool: deque[ConfigurablePokerNet] = deque(maxlen=pool_size)
         self._snapshot_to_pool()
 
-        self.memory: deque[tuple[np.ndarray, int, float, np.ndarray, float]] = deque(maxlen=20000)
+        self.memory: deque[Tuple[np.ndarray, int, float, np.ndarray, float]] = deque(maxlen=20000)
         self.batch_size = 64
         self.gamma = 0.99
         self.epsilon = 1.0
         self.epsilon_decay = 0.995
         self.epsilon_min = 0.05
+
+        # Tracking metrics across episodes
+        self.history: Dict[str, List[float]] = {
+            "episode": [],
+            "reward": [],
+            "rolling_reward": [],
+            "win_rate": [],
+            "loss": [],
+            "epsilon": [],
+        }
 
     def update_target_network(self) -> None:
         self.target_agent.load_state_dict(self.current_agent.state_dict())
@@ -229,9 +249,9 @@ class PokerSelfPlayTrainer:
         self.opponent_pool.append(snapshot)
         print(f"[Pool Update] Added model snapshot. Total pool size: {len(self.opponent_pool)}")
 
-    def train_step(self) -> None:
+    def train_step(self) -> Optional[float]:
         if len(self.memory) < self.batch_size:
-            return
+            return None
 
         batch = random.sample(self.memory, self.batch_size)
         states, actions, rewards, next_states, dones = zip(*batch)
@@ -255,18 +275,78 @@ class PokerSelfPlayTrainer:
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
+        return float(loss.item())
+
+    def save_model(self, output_path: str = "checkpoints/poker_dqn_final.pt") -> str:
+        """Save the final trained neural network and training metadata."""
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        payload = {
+            "model_state_dict": self.current_agent.state_dict(),
+            "state_dim": self.state_dim,
+            "action_dim": self.action_dim,
+            "hidden_dims": self.hidden_dims,
+            "epsilon": self.epsilon,
+            "history": self.history,
+        }
+        torch.save(payload, output_path)
+        print(f"[Saved] Final model checkpoint written to {output_path}")
+        return output_path
+
+    def plot_progress(self, output_path: str = "checkpoints/training_progress.png") -> Optional[str]:
+        """Plot rolling reward, win rate, and TD loss to visually verify training."""
+        if not self.history["episode"]:
+            return None
+
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            print("[Viz] matplotlib not installed; skipping chart generation.")
+            return None
+
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        episodes = self.history["episode"]
+
+        fig, axes = plt.subplots(2, 1, figsize=(9, 6), sharex=True)
+
+        axes[0].plot(episodes, self.history["rolling_reward"], label="Rolling Mean Reward (50 ep)", linewidth=2)
+        axes[0].plot(episodes, self.history["win_rate"], label="Rolling Win Rate (50 ep)", linestyle="--")
+        axes[0].axhline(0.0, color="gray", linewidth=0.8, alpha=0.6)
+        axes[0].set_ylabel("Reward / Win Rate")
+        axes[0].set_title("Poker Self-Play DQN Progress")
+        axes[0].legend(loc="upper left")
+        axes[0].grid(True, alpha=0.3)
+
+        axes[1].plot(episodes, self.history["loss"], label="Episode Mean TD Loss", color="tab:orange")
+        axes[1].set_xlabel("Episode")
+        axes[1].set_ylabel("MSE Loss")
+        axes[1].legend(loc="upper right")
+        axes[1].grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=150)
+        plt.close(fig)
+        print(f"[Viz] Training progress chart saved to {output_path}")
+        return output_path
 
     def run_training_loop(
         self,
         num_episodes: int = 500,
         snapshot_interval: int = 50,
         target_update_interval: int = 25,
-    ) -> None:
+        log_interval: int = 25,
+        save_path: str = "checkpoints/poker_dqn_final.pt",
+        plot_path: str = "checkpoints/training_progress.png",
+    ) -> ConfigurablePokerNet:
+        """Runs the main training process across self-play episodes."""
         cz_env: ChipzenPokerEnv = make_heads_up_holdem_env(
             start_stack=500,
             small_blind=1,
             big_blind=2,
         )
+
+        recent_rewards: deque[float] = deque(maxlen=50)
+        recent_wins: deque[float] = deque(maxlen=50)
+        recent_losses: deque[float] = deque(maxlen=50)
 
         for episode in range(1, num_episodes + 1):
             if random.random() < 0.5 or len(self.opponent_pool) == 0:
@@ -291,7 +371,6 @@ class PokerSelfPlayTrainer:
                 use_epsilon=False,
                 epsilon=0.0,
             )
-            bots = {agent_seat: train_bot, opponent_seat: opp_bot}
 
             obs, state = cz_env.reset()
             done = [False] * len(obs.get("stacks", [True, True]))
@@ -299,20 +378,22 @@ class PokerSelfPlayTrainer:
 
             pending_state_vec: Optional[np.ndarray] = None
             pending_action_idx: Optional[int] = None
+            episode_reward = 0.0
+            episode_losses: List[float] = []
 
             while not all(done):
                 acting_seat = obs.get("action", -1)
                 if acting_seat < 0 or state is None:
                     break
 
-                # If the training bot had a pending decision before the opponent acted,
-                # close out that transition using the state observed when control returns.
                 if pending_state_vec is not None and pending_action_idx is not None:
                     next_vec = game_state_to_features(state, self.state_dim)
                     self.memory.append(
                         (pending_state_vec, pending_action_idx, 0.0, next_vec, 0.0)
                     )
-                    self.train_step()
+                    loss_val = self.train_step()
+                    if loss_val is not None:
+                        episode_losses.append(loss_val)
                     pending_state_vec = None
                     pending_action_idx = None
 
@@ -331,20 +412,42 @@ class PokerSelfPlayTrainer:
                     if is_hand_done:
                         next_vec = game_state_to_features(next_state, self.state_dim)
                         reward = float(payouts[agent_seat]) if agent_seat < len(payouts) else 0.0
+                        episode_reward += reward
                         self.memory.append((state_vec, action_idx, reward, next_vec, 1.0))
-                        self.train_step()
+                        loss_val = self.train_step()
+                        if loss_val is not None:
+                            episode_losses.append(loss_val)
                     else:
                         pending_state_vec = state_vec
                         pending_action_idx = action_idx
 
                 state = next_state
 
-            # If the hand ended on the opponent's final action, finalize the training bot's last transition
             if pending_state_vec is not None and pending_action_idx is not None:
                 next_vec = game_state_to_features(state, self.state_dim)
                 reward = float(payouts[agent_seat]) if agent_seat < len(payouts) else 0.0
+                episode_reward += reward
                 self.memory.append((pending_state_vec, pending_action_idx, reward, next_vec, 1.0))
-                self.train_step()
+                loss_val = self.train_step()
+                if loss_val is not None:
+                    episode_losses.append(loss_val)
+
+            mean_ep_loss = float(np.mean(episode_losses)) if episode_losses else 0.0
+            recent_rewards.append(episode_reward)
+            recent_wins.append(1.0 if episode_reward > 0 else 0.0)
+            if episode_losses:
+                recent_losses.append(mean_ep_loss)
+
+            rolling_reward = float(np.mean(recent_rewards))
+            rolling_win_rate = float(np.mean(recent_wins))
+            rolling_loss = float(np.mean(recent_losses)) if recent_losses else 0.0
+
+            self.history["episode"].append(float(episode))
+            self.history["reward"].append(episode_reward)
+            self.history["rolling_reward"].append(rolling_reward)
+            self.history["win_rate"].append(rolling_win_rate)
+            self.history["loss"].append(rolling_loss)
+            self.history["epsilon"].append(self.epsilon)
 
             self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
 
@@ -354,10 +457,24 @@ class PokerSelfPlayTrainer:
             if episode % snapshot_interval == 0:
                 self._snapshot_to_pool()
 
+            if episode % log_interval == 0 or episode == 1:
+                print(
+                    f"[Ep {episode:4d}/{num_episodes}] "
+                    f"roll_reward={rolling_reward:+6.2f} | "
+                    f"win_rate={rolling_win_rate:4.2f} | "
+                    f"loss={rolling_loss:7.3f} | "
+                    f"eps={self.epsilon:.3f} | "
+                    f"buf={len(self.memory)}"
+                )
+
             if 0 in cz_env.dealer.stacks:
                 cz_env.env.reset(reset_stacks=True)
+
+        self.save_model(save_path)
+        self.plot_progress(plot_path)
+        return self.current_agent
 
 
 if __name__ == "__main__":
     trainer = PokerSelfPlayTrainer(state_dim=8, action_dim=3)
-    trainer.run_training_loop()
+    trainer.run_training_loop(num_episodes=500, snapshot_interval=50, log_interval=25)
