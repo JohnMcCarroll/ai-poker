@@ -198,7 +198,7 @@ class ChipzenDQNBot(Bot):
 
 
 class PokerSelfPlayTrainer:
-    """Manages self-play training over ChipzenPokerEnv with replay, logging, and checkpoints."""
+    """Manages self-play training over ChipzenPokerEnv with stabilized DQN updates."""
 
     def __init__(
         self,
@@ -206,17 +206,22 @@ class PokerSelfPlayTrainer:
         action_dim: int,
         hidden_dims: Optional[List[int]] = None,
         pool_size: int = 5,
+        max_grad_norm: float = 10.0,
+        reward_clip_bb: Optional[float] = 50.0,
     ):
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.hidden_dims = hidden_dims if hidden_dims is not None else [128, 128]
+        self.max_grad_norm = max_grad_norm
+        self.reward_clip_bb = reward_clip_bb
 
         self.current_agent = ConfigurablePokerNet(state_dim, action_dim, self.hidden_dims)
         self.target_agent = ConfigurablePokerNet(state_dim, action_dim, self.hidden_dims)
         self.update_target_network()
 
         self.optimizer = optim.Adam(self.current_agent.parameters(), lr=0.001)
-        self.criterion = nn.MSELoss()
+        # 1. Huber / Smooth L1 loss damps outlier TD spikes better than squared MSE
+        self.criterion = nn.SmoothL1Loss()
 
         self.opponent_pool: deque[ConfigurablePokerNet] = deque(maxlen=pool_size)
         self._snapshot_to_pool()
@@ -228,15 +233,22 @@ class PokerSelfPlayTrainer:
         self.epsilon_decay = 0.995
         self.epsilon_min = 0.05
 
-        # Tracking metrics across episodes
         self.history: Dict[str, List[float]] = {
             "episode": [],
-            "reward": [],
-            "rolling_reward": [],
+            "reward_bb": [],
+            "rolling_reward_bb": [],
             "win_rate": [],
             "loss": [],
             "epsilon": [],
         }
+
+    def normalize_reward(self, raw_payout: float, big_blind: float) -> float:
+        """Convert raw chip payout into big-blind units with optional clipping."""
+        bb = max(float(big_blind), 1e-6)
+        reward_bb = float(raw_payout) / bb
+        if self.reward_clip_bb is not None:
+            reward_bb = max(-self.reward_clip_bb, min(self.reward_clip_bb, reward_bb))
+        return reward_bb
 
     def update_target_network(self) -> None:
         self.target_agent.load_state_dict(self.current_agent.state_dict())
@@ -274,6 +286,9 @@ class PokerSelfPlayTrainer:
         loss = self.criterion(state_action_values, target_values)
         self.optimizer.zero_grad()
         loss.backward()
+        # 2. Gradient norm clipping prevents runaway updates on noisy TD targets
+        if self.max_grad_norm is not None and self.max_grad_norm > 0:
+            torch.nn.utils.clip_grad_norm_(self.current_agent.parameters(), max_norm=self.max_grad_norm)
         self.optimizer.step()
         return float(loss.item())
 
@@ -285,6 +300,8 @@ class PokerSelfPlayTrainer:
             "state_dim": self.state_dim,
             "action_dim": self.action_dim,
             "hidden_dims": self.hidden_dims,
+            "max_grad_norm": self.max_grad_norm,
+            "reward_clip_bb": self.reward_clip_bb,
             "epsilon": self.epsilon,
             "history": self.history,
         }
@@ -293,7 +310,7 @@ class PokerSelfPlayTrainer:
         return output_path
 
     def plot_progress(self, output_path: str = "checkpoints/training_progress.png") -> Optional[str]:
-        """Plot rolling reward, win rate, and TD loss to visually verify training."""
+        """Plot rolling reward (in BB), win rate, and SmoothL1 TD loss."""
         if not self.history["episode"]:
             return None
 
@@ -308,17 +325,17 @@ class PokerSelfPlayTrainer:
 
         fig, axes = plt.subplots(2, 1, figsize=(9, 6), sharex=True)
 
-        axes[0].plot(episodes, self.history["rolling_reward"], label="Rolling Mean Reward (50 ep)", linewidth=2)
+        axes[0].plot(episodes, self.history["rolling_reward_bb"], label="Rolling Mean Reward (BB, 50 ep)", linewidth=2)
         axes[0].plot(episodes, self.history["win_rate"], label="Rolling Win Rate (50 ep)", linestyle="--")
         axes[0].axhline(0.0, color="gray", linewidth=0.8, alpha=0.6)
-        axes[0].set_ylabel("Reward / Win Rate")
-        axes[0].set_title("Poker Self-Play DQN Progress")
+        axes[0].set_ylabel("BB / Win Rate")
+        axes[0].set_title("Poker Self-Play DQN Progress (Stabilized)")
         axes[0].legend(loc="upper left")
         axes[0].grid(True, alpha=0.3)
 
-        axes[1].plot(episodes, self.history["loss"], label="Episode Mean TD Loss", color="tab:orange")
+        axes[1].plot(episodes, self.history["loss"], label="Episode Mean SmoothL1 Loss", color="tab:orange")
         axes[1].set_xlabel("Episode")
-        axes[1].set_ylabel("MSE Loss")
+        axes[1].set_ylabel("Smooth L1 Loss")
         axes[1].legend(loc="upper right")
         axes[1].grid(True, alpha=0.3)
 
@@ -334,17 +351,19 @@ class PokerSelfPlayTrainer:
         snapshot_interval: int = 50,
         target_update_interval: int = 25,
         log_interval: int = 25,
+        small_blind: int = 50,
+        big_blind: int = 100,
         save_path: str = "checkpoints/poker_dqn_final.pt",
         plot_path: str = "checkpoints/training_progress.png",
     ) -> ConfigurablePokerNet:
         """Runs the main training process across self-play episodes."""
         cz_env: ChipzenPokerEnv = make_heads_up_holdem_env(
-            start_stack=500,
-            small_blind=1,
-            big_blind=2,
+            start_stack=10000,
+            small_blind=small_blind,
+            big_blind=big_blind,
         )
 
-        recent_rewards: deque[float] = deque(maxlen=50)
+        recent_rewards_bb: deque[float] = deque(maxlen=50)
         recent_wins: deque[float] = deque(maxlen=50)
         recent_losses: deque[float] = deque(maxlen=50)
 
@@ -378,7 +397,7 @@ class PokerSelfPlayTrainer:
 
             pending_state_vec: Optional[np.ndarray] = None
             pending_action_idx: Optional[int] = None
-            episode_reward = 0.0
+            episode_reward_bb = 0.0
             episode_losses: List[float] = []
 
             while not all(done):
@@ -411,9 +430,11 @@ class PokerSelfPlayTrainer:
                 if acting_seat == agent_seat and state_vec is not None and action_idx is not None:
                     if is_hand_done:
                         next_vec = game_state_to_features(next_state, self.state_dim)
-                        reward = float(payouts[agent_seat]) if agent_seat < len(payouts) else 0.0
-                        episode_reward += reward
-                        self.memory.append((state_vec, action_idx, reward, next_vec, 1.0))
+                        raw_payout = payouts[agent_seat] if agent_seat < len(payouts) else 0.0
+                        # 3. Normalize terminal payout by big_blind before storing/updating
+                        reward_bb = self.normalize_reward(raw_payout, big_blind)
+                        episode_reward_bb += reward_bb
+                        self.memory.append((state_vec, action_idx, reward_bb, next_vec, 1.0))
                         loss_val = self.train_step()
                         if loss_val is not None:
                             episode_losses.append(loss_val)
@@ -425,26 +446,27 @@ class PokerSelfPlayTrainer:
 
             if pending_state_vec is not None and pending_action_idx is not None:
                 next_vec = game_state_to_features(state, self.state_dim)
-                reward = float(payouts[agent_seat]) if agent_seat < len(payouts) else 0.0
-                episode_reward += reward
-                self.memory.append((pending_state_vec, pending_action_idx, reward, next_vec, 1.0))
+                raw_payout = payouts[agent_seat] if agent_seat < len(payouts) else 0.0
+                reward_bb = self.normalize_reward(raw_payout, big_blind)
+                episode_reward_bb += reward_bb
+                self.memory.append((pending_state_vec, pending_action_idx, reward_bb, next_vec, 1.0))
                 loss_val = self.train_step()
                 if loss_val is not None:
                     episode_losses.append(loss_val)
 
             mean_ep_loss = float(np.mean(episode_losses)) if episode_losses else 0.0
-            recent_rewards.append(episode_reward)
-            recent_wins.append(1.0 if episode_reward > 0 else 0.0)
+            recent_rewards_bb.append(episode_reward_bb)
+            recent_wins.append(1.0 if episode_reward_bb > 0 else 0.0)
             if episode_losses:
                 recent_losses.append(mean_ep_loss)
 
-            rolling_reward = float(np.mean(recent_rewards))
+            rolling_reward_bb = float(np.mean(recent_rewards_bb))
             rolling_win_rate = float(np.mean(recent_wins))
             rolling_loss = float(np.mean(recent_losses)) if recent_losses else 0.0
 
             self.history["episode"].append(float(episode))
-            self.history["reward"].append(episode_reward)
-            self.history["rolling_reward"].append(rolling_reward)
+            self.history["reward_bb"].append(episode_reward_bb)
+            self.history["rolling_reward_bb"].append(rolling_reward_bb)
             self.history["win_rate"].append(rolling_win_rate)
             self.history["loss"].append(rolling_loss)
             self.history["epsilon"].append(self.epsilon)
@@ -460,7 +482,7 @@ class PokerSelfPlayTrainer:
             if episode % log_interval == 0 or episode == 1:
                 print(
                     f"[Ep {episode:4d}/{num_episodes}] "
-                    f"roll_reward={rolling_reward:+6.2f} | "
+                    f"roll_reward={rolling_reward_bb:+6.2f}BB | "
                     f"win_rate={rolling_win_rate:4.2f} | "
                     f"loss={rolling_loss:7.3f} | "
                     f"eps={self.epsilon:.3f} | "
@@ -476,5 +498,5 @@ class PokerSelfPlayTrainer:
 
 
 if __name__ == "__main__":
-    trainer = PokerSelfPlayTrainer(state_dim=8, action_dim=3)
-    trainer.run_training_loop(num_episodes=500, snapshot_interval=50, log_interval=25)
+    trainer = PokerSelfPlayTrainer(state_dim=8, action_dim=3, max_grad_norm=10.0, reward_clip_bb=50.0)
+    trainer.run_training_loop(num_episodes=5000, snapshot_interval=200, log_interval=50)
